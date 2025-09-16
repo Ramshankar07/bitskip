@@ -1,0 +1,61 @@
+*.env
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*/__pycache__/*
+*.py[cod]
+*$py.class
+
+# Virtual environments and IDE
+.venv/
+env/
+.venv*/
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and reports
+*.log
+/output-*/
+/test_output/
+
+# Build artifacts (C/C++/CUDA)
+bitnet/kernels/build/
+bitnet/kernels/**/temp.win-amd64-cpython-*/
+bitnet/kernels/*.egg-info/
+bitnet/kernels/*.pyd
+**/*.pyd
+*.exp
+*.lib
+*.obj
+
+# Datasets and large data dumps
+bitnet/data/datasets/
+*.jsonl
+*.csv
+*.tsv
+
+# Model checkpoints and weights
+*.pt
+*.bin
+*.safetensors
+*.ckpt
+
+# Images and large plots
+*.png
+*.jpg
+*.jpeg
+*.gif
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
+# Misc
+*.tmp
+*.cache/
+.cache/
