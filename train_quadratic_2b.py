@@ -34,6 +34,11 @@ from bitnet.utils.default_config import DefaultConfig
 # Load environment variables
 load_dotenv()
 
+# Disable HuggingFace caching
+os.environ["HF_DATASETS_CACHE"] = ""
+os.environ["TRANSFORMERS_CACHE"] = ""
+os.environ["HF_HOME"] = ""
+
 class QuadraticSchedule2BBitNetConfig(DefaultConfig):
     """2B Parameter BitNet configuration optimized for H200 GPU."""
     
@@ -59,9 +64,9 @@ class QuadraticSchedule2BBitNetConfig(DefaultConfig):
         # Override with 2B parameter configuration
         self.hidden_size = 2048  # Optimized for 2B parameters
         self.num_hidden_layers = 28  # 28 layers for 2B parameters
-        self.num_attention_heads = 16  # 16 heads (2048/16 = 128 head_dim)
+        self.num_attention_heads = 16  # 16 query heads (2048/16 = 128 head_dim)
         self.head_dim = 128  # 2048/16 = 128
-        self.num_kv_heads = 4  # Must divide hidden_size
+        self.num_kv_heads = 4  # 4 key-value heads (16/4 = 4 queries per kv)
         self.max_position_embeddings = 1024  # Reduced for memory efficiency
         self.max_length = 1024  # Match max_position_embeddings
         
@@ -219,7 +224,9 @@ def parse_args():
     parser.add_argument('--num_layers', type=int, default=28,
                        help='Number of transformer layers (default: 28 for 2B parameters)')
     parser.add_argument('--num_heads', type=int, default=16,
-                       help='Number of attention heads (default: 16 for 2B parameters)')
+                       help='Number of query attention heads (default: 16 for 2B parameters)')
+    parser.add_argument('--num_kv_heads', type=int, default=4,
+                       help='Number of key-value heads for GQA (default: 4 for 2B parameters)')
     parser.add_argument('--batch_size', type=int, default=1,
                       help='Training batch size (default: 1 for memory efficiency)')
     parser.add_argument('--learning_rate', type=float, default=3e-5,
@@ -383,6 +390,7 @@ def main():
         "hidden_size": args.hidden_size,
         "num_hidden_layers": args.num_layers,
         "num_attention_heads": args.num_heads,
+        "num_kv_heads": args.num_kv_heads,
         "max_position_embeddings": args.max_length,
         "max_length": args.max_length,
         # All features enabled (early exit disabled for memory efficiency)
@@ -415,7 +423,9 @@ def main():
     logger.info(f"  - Model Type: Native BitNet (model1)")
     logger.info(f"  - Hidden Size: {config.hidden_size}")
     logger.info(f"  - Number of Layers: {config.num_hidden_layers}")
-    logger.info(f"  - Number of Heads: {config.num_attention_heads}")
+    logger.info(f"  - Number of Query Heads: {config.num_attention_heads}")
+    logger.info(f"  - Number of KV Heads: {config.num_kv_heads}")
+    logger.info(f"  - Queries per KV: {config.num_attention_heads // config.num_kv_heads}")
     logger.info(f"  - Head Dimension: {config.head_dim}")
     logger.info(f"  - Max Sequence Length: {config.max_position_embeddings}")
     logger.info(f"  - Vocabulary Size: {config.vocab_size}")
@@ -577,7 +587,7 @@ def main():
         optimizer, T_max=args.num_steps, eta_min=1e-6
     )
     
-    # Create dataloaders
+    # Create dataloaders (no caching)
     train_dataloader = create_streaming_dataloader(
         dataset_name="HuggingFaceFW/fineweb-edu",
         subset="sample-10BT",

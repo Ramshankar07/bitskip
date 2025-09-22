@@ -308,6 +308,7 @@ def create_streaming_dataloader(
         name=subset,
         split=split,
         streaming=streaming,
+        cache_dir=None,  # Disable caching
     )
     # Remove all columns except 'text' (if present)
     # This works even if there are extra columns in the dataset

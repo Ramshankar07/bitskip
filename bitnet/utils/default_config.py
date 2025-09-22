@@ -25,11 +25,11 @@ class DefaultConfig:
     # All dimensions are powers of 2 to ensure compatibility with H-BitLinear layers
     # Target: ~2.1B parameters with 12 layers, 1024 hidden dim, 16×64 attention heads
     vocab_size: int = 128256
-    hidden_size: int = 1024  # dim (2^10 - power of 2 for H-BitLinear)
-    num_hidden_layers: int = 12  # num_layers (BitSkip specification)
+    hidden_size: int = 2048  # dim (2^10 - power of 2 for H-BitLinear)
+    num_hidden_layers: int = 28  # num_layers (BitSkip specification)
     num_attention_heads: int = 16  # num_heads (BitSkip specification)
     num_kv_heads: int = 4  # num_kv_heads (2^2 - must divide hidden_size)
-    head_dim: int = 64  # head_dim (1024/16 = 64, BitSkip specification)
+    head_dim: int = 128  # head_dim (1024/16 = 64, BitSkip specification)
     mlp_ratio: float = 2.0  # 4096/1024 = 4.0 (BitSkip FFN intermediate specification)
     max_position_embeddings: int = 1024  # max_seq_len (matches max_length for memory efficiency)
     hidden_dropout_prob: float = 0.1

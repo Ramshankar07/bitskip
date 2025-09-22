@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-1B Parameter BitNet Training Script - H200 GPU Scaling Study
-Early Exit + Quadratic Schedule + Layer Skipping
+2B Parameter H-BitLinear BitNet Training Script - H200 GPU Scaling Study
+Early Exit + Quadratic Schedule + Layer Skipping + H-BitLinear
 
-This script implements a 1B parameter BitNet model optimized for H200 GPU:
-- Hidden Size: 1536 (power of 2 compatible)
-- Layers: 20
+This script implements a 2B parameter BitNet model with H-BitLinear layers optimized for H200 GPU:
+- Hidden Size: 2048 (power of 2 compatible)
+- Layers: 28
 - Attention Heads: 16
-- Target: ~963M parameters (close to 1B)
-- Memory: ~7.2GB (fits comfortably in H200's 141GB)
+- Target: ~1.94B parameters (close to 2B)
+- Memory: ~14.5GB (fits comfortably in H200's 141GB)
+- Uses H-BitLinear layers with Hadamard transformation
 """
 
 import os
@@ -27,7 +28,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from dotenv import load_dotenv
 
-from bitnet.modeling.model import BitNetModel  # Using model1 (native BitNet)
+from bitnet.modeling.model2 import BitNetModel2  # Using model2 (H-BitLinear)
 from bitnet.data.streaming_loader import create_streaming_dataloader
 from bitnet.utils.default_config import DefaultConfig
 
@@ -39,15 +40,15 @@ os.environ["HF_DATASETS_CACHE"] = ""
 os.environ["TRANSFORMERS_CACHE"] = ""
 os.environ["HF_HOME"] = ""
 
-class QuadraticSchedule1BBitNetConfig(DefaultConfig):
-    """1B Parameter BitNet configuration optimized for H200 GPU."""
+class QuadraticSchedule2BHBitLinearConfig(DefaultConfig):
+    """2B Parameter H-BitLinear BitNet configuration optimized for H200 GPU."""
     
     def __init__(self, **kwargs):
         # Extract quadratic schedule parameters
         quadratic_params = {
             'use_layer_skipping': kwargs.pop('use_layer_skipping', True),
             'skip_probability': kwargs.pop('skip_probability', 0.1),
-            'min_layers_to_keep': kwargs.pop('min_layers_to_keep', 4),
+            'min_layers_to_keep': kwargs.pop('min_layers_to_keep', 6),
             'use_early_exit': kwargs.pop('use_early_exit', True),
             'early_exit_threshold': kwargs.pop('early_exit_threshold', 0.95),
             'dropout_schedule': kwargs.pop('dropout_schedule', 'quadratic'),
@@ -61,19 +62,23 @@ class QuadraticSchedule1BBitNetConfig(DefaultConfig):
         for key, value in quadratic_params.items():
             setattr(self, key, value)
         
-        # Override with 1B parameter configuration
-        self.hidden_size = 1536  # Optimized for 1B parameters
-        self.num_hidden_layers = 20  # 20 layers for 1B parameters
-        self.num_attention_heads = 16  # 16 query heads (1536/16 = 96 head_dim)
-        self.head_dim = 96  # 1536/16 = 96
+        # Override with 2B parameter configuration
+        self.hidden_size = 2048  # Optimized for 2B parameters
+        self.num_hidden_layers = 28  # 28 layers for 2B parameters
+        self.num_attention_heads = 16  # 16 query heads (2048/16 = 128 head_dim)
+        self.head_dim = 128  # 2048/16 = 128
         self.num_kv_heads = 4  # 4 key-value heads (16/4 = 4 queries per kv)
         self.max_position_embeddings = 1024  # Reduced for memory efficiency
         self.max_length = 1024  # Match max_position_embeddings
         
+        # H-BitLinear specific configuration
+        self.activation_bits = 4  # H-BitLinear uses 4-bit activations
+        self.weight_bits = 1  # H-BitLinear uses 1-bit weights (ternary)
+        
         # Memory optimization for H200 GPU
-        self.batch_size = 2  # Reduced batch size for memory efficiency
+        self.batch_size = 1  # Very conservative batch size for 2B model
         self.eval_batch_size = 1
-        self.gradient_accumulation_steps = 8  # Effective batch size = 16
+        self.gradient_accumulation_steps = 16  # Effective batch size = 16
         self.use_amp = True  # Enable mixed precision
         self.gradient_checkpointing = True  # Save memory during training
 
@@ -86,13 +91,13 @@ def setup_logging(log_dir: str):
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(os.path.join(log_dir, 'quadratic_1b_training.log')),
+            logging.FileHandler(os.path.join(log_dir, 'quadratic_hbitlinear_2b_training.log')),
             logging.StreamHandler()
         ]
     )
 
-def map_checkpoint_layers(state_dict, model_type='native'):
-    """Map checkpoint layers for different model architectures."""
+def map_checkpoint_layers(state_dict, model_type='hbitlinear'):
+    """Map checkpoint layers for H-BitLinear model architectures."""
     mapped_dict = {}
     
     # Direct mappings for embeddings and output layers
@@ -108,7 +113,7 @@ def map_checkpoint_layers(state_dict, model_type='native'):
         if old_key in state_dict:
             mapped_dict[new_key] = state_dict[old_key]
     
-    # Map layer weights for different model types
+    # Map layer weights for H-BitLinear model
     layer_keys = [key for key in state_dict.keys() if key.startswith('layers.')]
     layer_indices = set()
     for key in layer_keys:
@@ -116,7 +121,7 @@ def map_checkpoint_layers(state_dict, model_type='native'):
         if len(parts) >= 2 and parts[1].isdigit():
             layer_indices.add(int(parts[1]))
     
-    num_layers = max(layer_indices) + 1 if layer_indices else 20
+    num_layers = max(layer_indices) + 1 if layer_indices else 28
     print(f"Detected {num_layers} layers in checkpoint")
     
     for layer_idx in range(num_layers):
@@ -153,7 +158,7 @@ def map_checkpoint_layers(state_dict, model_type='native'):
             mapped_dict[f'layers.{layer_idx}.self_attn.out_proj.weight'] = state_dict[f'{old_prefix}.self_attn.o_proj.weight']
             mapped_dict[f'layers.{layer_idx}.self_attn.out_proj.bias'] = torch.zeros(state_dict[f'{old_prefix}.self_attn.o_proj.weight'].shape[0])
         
-        # Feed forward network (BitLinear layers)
+        # Feed forward network (H-BitLinear layers)
         if f'{old_prefix}.feed_forward.up_proj.weight' in state_dict:
             mapped_dict[f'layers.{layer_idx}.feed_forward.0.weight'] = state_dict[f'{old_prefix}.feed_forward.up_proj.weight']
         
@@ -167,7 +172,7 @@ def compute_joint_loss(model, batch, lambda_q=0.1, lambda_r=0.05):
     Compute joint loss combining task loss with quantization and routing losses.
     
     Args:
-        model: The BitNet model
+        model: The H-BitLinear BitNet model
         batch: Input batch dictionary
         lambda_q: Weight for quantization loss
         lambda_r: Weight for routing loss
@@ -215,26 +220,32 @@ def compute_joint_loss(model, batch, lambda_q=0.1, lambda_r=0.05):
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='1B Parameter BitNet training - H200 GPU Scaling Study'
+        description='2B Parameter H-BitLinear BitNet training - H200 GPU Scaling Study'
     )
     
-    # Model architecture parameters - Use None as default to use 1B config values
-    parser.add_argument('--hidden_size', type=int, default=1536,
-                       help='Hidden size (default: 1536 for 1B parameters)')
-    parser.add_argument('--num_layers', type=int, default=20,
-                       help='Number of transformer layers (default: 20 for 1B parameters)')
+    # Model architecture parameters - Use None as default to use 2B config values
+    parser.add_argument('--hidden_size', type=int, default=2048,
+                       help='Hidden size (default: 2048 for 2B parameters)')
+    parser.add_argument('--num_layers', type=int, default=28,
+                       help='Number of transformer layers (default: 28 for 2B parameters)')
     parser.add_argument('--num_heads', type=int, default=16,
-                       help='Number of query attention heads (default: 16 for 1B parameters)')
+                       help='Number of query attention heads (default: 16 for 2B parameters)')
     parser.add_argument('--num_kv_heads', type=int, default=4,
-                       help='Number of key-value heads for GQA (default: 4 for 1B parameters)')
-    parser.add_argument('--batch_size', type=int, default=2,
-                      help='Training batch size (default: 2 for memory efficiency)')
-    parser.add_argument('--learning_rate', type=float, default=5e-5,
-                      help='Learning rate (default: 5e-5)')
+                       help='Number of key-value heads for GQA (default: 4 for 2B parameters)')
+    parser.add_argument('--batch_size', type=int, default=1,
+                      help='Training batch size (default: 1 for memory efficiency)')
+    parser.add_argument('--learning_rate', type=float, default=3e-5,
+                      help='Learning rate (default: 3e-5 for 2B model)')
     parser.add_argument('--max_length', type=int, default=1024,
                       help='Maximum sequence length (default: 1024 for memory efficiency)')
     parser.add_argument('--num_steps', type=int, default=1000,
                       help='Number of training steps')
+    
+    # H-BitLinear specific parameters
+    parser.add_argument('--activation_bits', type=int, default=4,
+                      help='Number of bits for activation quantization (default: 4 for H-BitLinear)')
+    parser.add_argument('--weight_bits', type=int, default=1,
+                      help='Number of bits for weight quantization (default: 1 for H-BitLinear)')
     
     # Joint loss parameters
     parser.add_argument('--lambda_q', type=float, default=0.1,
@@ -242,7 +253,7 @@ def parse_args():
     parser.add_argument('--lambda_r', type=float, default=0.05,
                       help='Weight for routing loss in joint optimization')
     
-    parser.add_argument('--output_dir', type=str, default='./output-quadratic-1b',
+    parser.add_argument('--output_dir', type=str, default='./output-quadratic-hbitlinear-2b',
                       help='Output directory')
     parser.add_argument('--logging_steps', type=int, default=10,
                       help='Log every X steps')
@@ -346,7 +357,7 @@ class EarlyExitLoss(nn.Module):
         return total_loss / self.num_layers
 
 def main():
-    """Main training function for 1B parameter quadratic schedule model."""
+    """Main training function for 2B parameter H-BitLinear quadratic schedule model."""
     args = parse_args()
     
     # Setup logging
@@ -354,11 +365,11 @@ def main():
     logger = logging.getLogger(__name__)
     
     logger.info("=" * 80)
-    logger.info("1B PARAMETER BITNET TRAINING - H200 GPU SCALING STUDY")
+    logger.info("2B PARAMETER H-BITLINEAR BITNET TRAINING - H200 GPU SCALING STUDY")
     logger.info("=" * 80)
-    logger.info("Features: Native BitNet + Layer Dropout + BitLinear + Early Exit + Quadratic Schedule")
-    logger.info("Target: ~963M parameters (close to 1B)")
-    logger.info("Memory: ~7.2GB (fits comfortably in H200's 141GB)")
+    logger.info("Features: H-BitLinear + Layer Dropout + GQA + Early Exit + Quadratic Schedule")
+    logger.info("Target: ~1.94B parameters (close to 2B)")
+    logger.info("Memory: ~14.5GB (fits comfortably in H200's 141GB)")
     logger.info("=" * 80)
     
     # Setup device
@@ -381,22 +392,25 @@ def main():
         logger.error(f"Failed to load tokenizer: {str(e)}")
         raise
     
-    # Create 1B parameter configuration
+    # Create 2B parameter H-BitLinear configuration
     config_kwargs = {
         "dataset_name": "HuggingFaceFW/fineweb-edu",
         "subset": "sample-10BT",
         "vocab_size": actual_vocab_size,
-        # 1B parameter architecture (optimized for H200 GPU)
+        # 2B parameter architecture (optimized for H200 GPU)
         "hidden_size": args.hidden_size,
         "num_hidden_layers": args.num_layers,
         "num_attention_heads": args.num_heads,
         "num_kv_heads": args.num_kv_heads,
         "max_position_embeddings": args.max_length,
         "max_length": args.max_length,
+        # H-BitLinear specific configuration
+        "activation_bits": args.activation_bits,
+        "weight_bits": args.weight_bits,
         # All features enabled (early exit disabled for memory efficiency)
         "use_layer_skipping": True,
         "skip_probability": 0.1,
-        "min_layers_to_keep": 4,
+        "min_layers_to_keep": 6,  # Increased for larger model
         "use_early_exit": False,  # Disabled for memory efficiency
         "early_exit_threshold": args.early_exit_threshold,
         "dropout_schedule": 'quadratic',
@@ -409,18 +423,18 @@ def main():
     }
     
     logger.info(f"DEBUG: config_kwargs = {config_kwargs}")
-    config = QuadraticSchedule1BBitNetConfig(**config_kwargs)
+    config = QuadraticSchedule2BHBitLinearConfig(**config_kwargs)
     logger.info(f"DEBUG: After config creation, config.num_hidden_layers = {config.num_hidden_layers}")
     
-    # Initialize 1B parameter model (Native BitNet)
-    logger.info("Initializing 1B parameter BitNet model (Native BitNet)...")
+    # Initialize 2B parameter H-BitLinear model
+    logger.info("Initializing 2B parameter H-BitLinear BitNet model...")
     
     # Log all configuration parameters
     logger.info("=" * 60)
-    logger.info("1B PARAMETER CONFIGURATION (H200 GPU OPTIMIZED)")
+    logger.info("2B PARAMETER H-BITLINEAR CONFIGURATION (H200 GPU OPTIMIZED)")
     logger.info("=" * 60)
     logger.info(f"Model Architecture:")
-    logger.info(f"  - Model Type: Native BitNet (model1)")
+    logger.info(f"  - Model Type: H-BitLinear BitNet (model2)")
     logger.info(f"  - Hidden Size: {config.hidden_size}")
     logger.info(f"  - Number of Layers: {config.num_hidden_layers}")
     logger.info(f"  - Number of Query Heads: {config.num_attention_heads}")
@@ -429,6 +443,12 @@ def main():
     logger.info(f"  - Head Dimension: {config.head_dim}")
     logger.info(f"  - Max Sequence Length: {config.max_position_embeddings}")
     logger.info(f"  - Vocabulary Size: {config.vocab_size}")
+    logger.info(f"")
+    logger.info(f"H-BitLinear Configuration:")
+    logger.info(f"  - Activation Bits: {config.activation_bits}")
+    logger.info(f"  - Weight Bits: {config.weight_bits}")
+    logger.info(f"  - Hadamard Transform: Enabled")
+    logger.info(f"  - Layer Normalization: Pre-quantization")
     logger.info(f"")
     logger.info(f"Training Parameters:")
     logger.info(f"  - Learning Rate: {config.learning_rate}")
@@ -441,7 +461,7 @@ def main():
     logger.info(f"Memory Optimization:")
     logger.info(f"  - Mixed Precision (AMP): {config.use_amp}")
     logger.info(f"  - Gradient Checkpointing: {config.gradient_checkpointing}")
-    logger.info(f"  - Estimated Memory: ~7.2GB (H200: 141GB)")
+    logger.info(f"  - Estimated Memory: ~14.5GB (H200: 141GB)")
     logger.info(f"")
     logger.info(f"Quadratic Schedule Features:")
     logger.info(f"  - Layer Skipping: {config.use_layer_skipping}")
@@ -457,7 +477,7 @@ def main():
     logger.info(f"  - Subset: {config.subset}")
     logger.info("=" * 60)
     
-    model = BitNetModel(config)  # Using model1 (native BitNet)
+    model = BitNetModel2(config)  # Using model2 (H-BitLinear)
     model.to(device)
     
     # Count parameters
@@ -467,7 +487,7 @@ def main():
     logger.info(f"Model Size: {total_params * 4 / (1024**3):.2f} GB (FP32), {total_params * 2 / (1024**3):.2f} GB (FP16)")
     
     # Test model forward method compatibility
-    logger.info("Testing model forward method compatibility...")
+    logger.info("Testing H-BitLinear model forward method compatibility...")
     try:
         # Test with a small batch to check if return_quantization_info is supported
         test_input_ids = torch.randint(0, config.vocab_size, (1, 10), device=device)
@@ -492,7 +512,7 @@ def main():
         logger.info("✓ Forward pass with return_quantization_info works")
         
     except Exception as e:
-        logger.warning(f"Model compatibility test failed: {str(e)}")
+        logger.warning(f"H-BitLinear model compatibility test failed: {str(e)}")
         logger.info("Will use fallback mode for joint loss computation")
     
     # Load checkpoint if specified
@@ -502,7 +522,7 @@ def main():
     # First try to load from output directory
     if os.path.exists(args.output_dir):
         # Look for the most recent checkpoint in output directory
-        checkpoint_files = [f for f in os.listdir(args.output_dir) if f.startswith('quadratic_1b_checkpoint_step_') and f.endswith('.pt')]
+        checkpoint_files = [f for f in os.listdir(args.output_dir) if f.startswith('quadratic_hbitlinear_2b_checkpoint_step_') and f.endswith('.pt')]
         if checkpoint_files:
             # Sort by step number and get the latest
             checkpoint_files.sort(key=lambda x: int(x.split('_step_')[1].split('.')[0]))
@@ -524,7 +544,7 @@ def main():
             if 'model_state_dict' in checkpoint:
                 state_dict = checkpoint['model_state_dict']
                 # Map checkpoint layers if needed
-                mapped_state_dict = map_checkpoint_layers(state_dict, 'native')
+                mapped_state_dict = map_checkpoint_layers(state_dict, 'hbitlinear')
                 model.load_state_dict(mapped_state_dict, strict=False)
                 logger.info("Checkpoint loaded successfully with layer mapping")
                 checkpoint_loaded = True
@@ -546,8 +566,8 @@ def main():
     # Safety check for num_layers and provide fallback
     num_layers = config.num_hidden_layers
     if num_layers is None or num_layers <= 0:
-        logger.warning(f"Invalid num_hidden_layers: {num_layers}, using default value 20")
-        num_layers = 20  # 1B model default
+        logger.warning(f"Invalid num_hidden_layers: {num_layers}, using default value 28")
+        num_layers = 28  # 2B model default
     
     quadratic_layer_skipping = QuadraticScheduleLayerSkipping(
         num_layers=num_layers,  # Use validated value
@@ -556,7 +576,7 @@ def main():
     
     # Log quadratic schedule details
     logger.info("=" * 60)
-    logger.info("QUADRATIC SCHEDULE DETAILS (1B MODEL)")
+    logger.info("QUADRATIC SCHEDULE DETAILS (2B H-BITLINEAR MODEL)")
     logger.info("=" * 60)
     logger.info(f"Quadratic Constant (c): {args.quadratic_constant}")
     logger.info(f"Number of Layers (L): {num_layers}")
@@ -610,7 +630,7 @@ def main():
     )
     
     # Training loop with quadratic schedule and early exit
-    logger.info("Starting 1B parameter quadratic schedule training...")
+    logger.info("Starting 2B parameter H-BitLinear quadratic schedule training...")
     if not checkpoint_loaded:
         global_step = 0
     
@@ -710,7 +730,7 @@ def main():
             if global_step % args.save_steps == 0:
                 checkpoint_path = os.path.join(
                     args.output_dir,
-                    f'quadratic_1b_checkpoint_step_{global_step}.pt'
+                    f'quadratic_hbitlinear_2b_checkpoint_step_{global_step}.pt'
                 )
                 torch.save({
                     'model_state_dict': model.state_dict(),
@@ -720,7 +740,7 @@ def main():
                     'step': global_step,
                     'loss': loss.item()
                 }, checkpoint_path)
-                logger.info(f"Saved 1B model checkpoint to {checkpoint_path}")
+                logger.info(f"Saved 2B H-BitLinear model checkpoint to {checkpoint_path}")
                 
                 # Clear memory after checkpoint save
                 if torch.cuda.is_available():
@@ -749,7 +769,7 @@ def main():
         plt.plot(training_steps, training_losses, 'b-', linewidth=2, label='Training Loss')
         plt.xlabel('Training Step')
         plt.ylabel('Loss')
-        plt.title('1B Parameter BitNet Training Loss (H200 GPU Scaling Study)')
+        plt.title('2B Parameter H-BitLinear BitNet Training Loss (H200 GPU Scaling Study)')
         plt.legend()
         plt.grid(True, alpha=0.3)
         
@@ -766,7 +786,7 @@ def main():
         plt.tight_layout()
         
         # Save the plot
-        plot_path = os.path.join(args.output_dir, 'quadratic_1b_training_loss.png')
+        plot_path = os.path.join(args.output_dir, 'quadratic_hbitlinear_2b_training_loss.png')
         plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         logger.info(f"Training loss plot saved to: {plot_path}")
         plt.close()
@@ -775,7 +795,7 @@ def main():
         logger.error(f"Failed to create training loss plot: {str(e)}")
     
     # Save final model
-    final_model_path = os.path.join(args.output_dir, 'quadratic_1b_final_model.pt')
+    final_model_path = os.path.join(args.output_dir, 'quadratic_hbitlinear_2b_final_model.pt')
     torch.save({
         'model_state_dict': model.state_dict(),
         'config': config,
@@ -788,11 +808,13 @@ def main():
         logger.info("Final GPU memory cleanup completed")
     
     logger.info("=" * 80)
-    logger.info("1B PARAMETER TRAINING COMPLETED SUCCESSFULLY!")
+    logger.info("2B PARAMETER H-BITLINEAR TRAINING COMPLETED SUCCESSFULLY!")
     logger.info("=" * 80)
-    logger.info("Features: Native BitNet + Layer Dropout + BitLinear + Early Exit + Quadratic Schedule")
+    logger.info("Features: H-BitLinear + Layer Dropout + GQA + Early Exit + Quadratic Schedule")
     logger.info(f"Model Size: {total_params:,} parameters (~{total_params/1e9:.1f}B)")
-    logger.info(f"Memory Usage: ~7.2GB (H200: 141GB)")
+    logger.info(f"Memory Usage: ~14.5GB (H200: 141GB)")
+    logger.info(f"Activation Bits: {config.activation_bits}")
+    logger.info(f"Weight Bits: {config.weight_bits}")
     logger.info(f"Quadratic Constant: {args.quadratic_constant}")
     logger.info(f"Early Exit Threshold: {args.early_exit_threshold}")
     logger.info(f"Final model saved to: {final_model_path}")
