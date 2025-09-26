@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-2B Parameter H-BitLinear BitNet Training Script - H200 GPU Scaling Study (Hugging Face Compatible)
-Early Exit + Quadratic Schedule + Layer Skipping + H-BitLinear + Standard Architecture + FP16
+1B Parameter BitNet Training Script - H200 GPU Scaling Study (Hugging Face Compatible)
+Early Exit + Quadratic Schedule + Layer Skipping + Standard Architecture + FP16
 
-This script implements a 2B parameter BitNet model with H-BitLinear layers optimized for H200 GPU with:
+This script implements a 1B parameter BitNet model optimized for H200 GPU with:
 - Hugging Face compatible architecture and configuration
 - Consistent naming conventions
 - Safetensors checkpoint format in FP16
@@ -11,9 +11,6 @@ This script implements a 2B parameter BitNet model with H-BitLinear layers optim
 - Architecture compatibility layer
 - FP16 training with automatic mixed precision
 - Gradient scaling for stable FP16 training
-- H-BitLinear layers with Hadamard transformation
-- Target: ~2.1B parameters (increased from 1.94B)
-- Memory: ~7.2GB FP16 (fits comfortably in H200's 141GB)
 """
 
 import os
@@ -24,15 +21,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
+import json
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-try:
-    from torch.amp import autocast, GradScaler
-except ImportError:
-    from torch.cuda.amp import autocast, GradScaler
+from torch.cuda.amp import autocast, GradScaler
 from transformers import (
     AutoTokenizer, 
     AutoConfig, 
@@ -44,9 +39,8 @@ from transformers import (
 from transformers.modeling_outputs import CausalLMOutput
 from safetensors.torch import save_file, load_file
 from dotenv import load_dotenv
-import json
 
-from bitnet.modeling.model2 import BitNetModel2
+from bitnet.modeling.model import BitNetModel
 from bitnet.data.streaming_loader import create_streaming_dataloader
 from bitnet.utils.default_config import DefaultConfig
 
@@ -60,35 +54,35 @@ os.environ["HF_HOME"] = ""
 
 class BitNetConfig:
     """
-    Hugging Face compatible BitNet configuration for 2B parameters with H-BitLinear.
+    Hugging Face compatible BitNet configuration.
     Uses standard HF naming conventions and structure.
     """
     
     def __init__(
         self,
         vocab_size: int = 128256,
-        hidden_size: int = 2048,  
-        num_hidden_layers: int = 28,  
-        num_attention_heads: int = 16, 
-        num_key_value_heads: int = 4,  
-        intermediate_size: int = 4096,  
+        hidden_size: int = 1536,
+        num_hidden_layers: int = 20,
+        num_attention_heads: int = 16,
+        num_key_value_heads: int = 4,
+        intermediate_size: int = 3072,
         max_position_embeddings: int = 1024,
         rms_norm_eps: float = 1e-5,
         hidden_dropout_prob: float = 0.1,
         attention_dropout: float = 0.1,
-        initializer_range: float = 0.01,
-        activation_bits: int = 4,  # H-BitLinear uses 4-bit activations
-        weight_bits: int = 1,  # H-BitLinear uses 1-bit weights (ternary)
+        initializer_range: float = 0.02,
+        activation_bits: int = 8,
+        weight_bits: int = 2,
         use_layer_skipping: bool = True,
         skip_probability: float = 0.1,
-        min_layers_to_keep: int = 8,  
-        use_early_exit: bool = False, 
+        min_layers_to_keep: int = 4,
+        use_early_exit: bool = False,
         early_exit_threshold: float = 0.95,
         dropout_schedule: str = "quadratic",
         quadratic_constant: float = 0.3,
         **kwargs
     ):
-        
+        # Standard Hugging Face model parameters
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers
@@ -101,16 +95,20 @@ class BitNetConfig:
         self.attention_dropout = attention_dropout
         self.initializer_range = initializer_range
         
-        # H-BitLinear specific parameters
+        # BitNet specific parameters
         self.activation_bits = activation_bits
         self.weight_bits = weight_bits
         
+        # Layer skipping parameters
         self.use_layer_skipping = use_layer_skipping
         self.skip_probability = skip_probability
         self.min_layers_to_keep = min_layers_to_keep
         
+        # Early exit parameters
         self.use_early_exit = use_early_exit
         self.early_exit_threshold = early_exit_threshold
+        
+        # Quadratic schedule parameters
         self.dropout_schedule = dropout_schedule
         self.quadratic_constant = quadratic_constant
         
@@ -143,7 +141,7 @@ class BitNetConfig:
 
 class BitNetForCausalLM(nn.Module):
     """
-    Hugging Face compatible BitNet model for causal language modeling (2B parameters with H-BitLinear).
+    Hugging Face compatible BitNet model for causal language modeling.
     Uses standard HF naming conventions and output format.
     
     Key Features:
@@ -151,8 +149,6 @@ class BitNetForCausalLM(nn.Module):
     - Consistent architecture across all model variants
     - Hugging Face compatible interface
     - Safetensors compatible (no duplicate tensors)
-    - FP16 optimized for memory efficiency
-    - H-BitLinear layers with Hadamard transformation
     """
     
     def __init__(self, config: BitNetConfig):
@@ -162,8 +158,11 @@ class BitNetForCausalLM(nn.Module):
         # Convert to internal config format
         internal_config = self._convert_to_internal_config(config)
         
-        # Initialize H-BitLinear BitNet model
-        self.model = BitNetModel2(internal_config)
+        # Initialize BitNet model
+        self.model = BitNetModel(internal_config)
+        
+        # Don't create a separate lm_head - use the one from the internal model
+        # This prevents memory sharing issues and ensures consistency
         
         # Initialize weights
         self.post_init()
@@ -260,8 +259,10 @@ class BitNetForCausalLM(nn.Module):
             'output_hidden_states': output_hidden_states
         }
         
+        # Forward pass through internal model
         outputs = self.model(**model_inputs)
         
+        # Get logits from the internal model's LM head
         if hasattr(outputs, 'logits'):
             logits = outputs.logits
         else:
@@ -269,6 +270,7 @@ class BitNetForCausalLM(nn.Module):
             hidden_states = outputs.last_hidden_state if hasattr(outputs, 'last_hidden_state') else outputs[0]
             logits = self.model.lm_head(hidden_states)
         
+        # Compute loss if labels are provided
         loss = None
         if labels is not None:
             # Shift so that tokens < n predict n
@@ -280,6 +282,7 @@ class BitNetForCausalLM(nn.Module):
             shift_logits = shift_logits.view(-1, self.config.vocab_size)
             shift_labels = shift_labels.view(-1)
             
+            # Enable model parallelism
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
         
@@ -343,84 +346,75 @@ class BitNetForCausalLM(nn.Module):
         model.load_state_dict(fixed_state_dict, strict=False)
         return model
 
+
 def setup_logging(log_dir: str):
     """Set up logging configuration."""
-
     log_dir = os.path.expanduser(log_dir)
     os.makedirs(log_dir, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler(os.path.join(log_dir, 'quadratic_hbitlinear_2b_hf_training.log')),
+            logging.FileHandler(os.path.join(log_dir, 'quadratic_1b_training.log')),
             logging.StreamHandler()
         ]
     )
 
-
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description='2B Parameter H-BitLinear BitNet training - H200 GPU Scaling Study (HF Compatible)'
+        description='1B Parameter BitNet training - H200 GPU Scaling Study (HF Compatible)'
     )
     
-    parser.add_argument('--hidden_size', type=int, default=2048,
-                       help='Hidden size (default: 2048 for ~2B parameters)')
-    parser.add_argument('--num_hidden_layers', type=int, default=28,
-                       help='Number of transformer layers (default: 28 for ~2B parameters)')
+    parser.add_argument('--hidden_size', type=int, default=1536,
+                       help='Hidden size (default: 1536 for 1B parameters)')
+    parser.add_argument('--num_hidden_layers', type=int, default=20,
+                       help='Number of transformer layers (default: 20 for 1B parameters)')
     parser.add_argument('--num_attention_heads', type=int, default=16,
-                       help='Number of attention heads (default: 16 for ~2B parameters)')
+                       help='Number of attention heads (default: 16 for 1B parameters)')
     parser.add_argument('--num_key_value_heads', type=int, default=4,
-                       help='Number of key-value heads for GQA (default: 4 for ~2B parameters)')
-    parser.add_argument('--intermediate_size', type=int, default=4096,
+                       help='Number of key-value heads for GQA (default: 4 for 1B parameters)')
+    parser.add_argument('--intermediate_size', type=int, default=3072,
                        help='Intermediate size for feed-forward network')
-    parser.add_argument('--batch_size', type=int, default=1,
-                      help='Training batch size (default: 1 for stability)')
-    parser.add_argument('--learning_rate', type=float, default=1e-5,
-                      help='Learning rate (default: 1e-5 for stability)')
+    parser.add_argument('--batch_size', type=int, default=4,
+                      help='Training batch size (default: 2 for memory efficiency)')
+    parser.add_argument('--learning_rate', type=float, default=5e-5,
+                      help='Learning rate (default: 5e-5)')
     parser.add_argument('--max_length', type=int, default=1024,
                       help='Maximum sequence length (default: 1024 for memory efficiency)')
     parser.add_argument('--num_steps', type=int, default=1000,
                       help='Number of training steps')
+    parser.add_argument('--quadratic_constant', type=float, default=0.3,
+                      help='Constant c in quadratic dropout: p_l = c·(l/L)²')
+    parser.add_argument('--early_exit_threshold', type=float, default=0.95,
+                      help='Confidence threshold for early exit')
     
-    # H-BitLinear specific parameters
-    parser.add_argument('--activation_bits', type=int, default=4,
-                      help='Number of bits for activation quantization (default: 4 for H-BitLinear)')
-    parser.add_argument('--weight_bits', type=int, default=1,
-                      help='Number of bits for weight quantization (default: 1 for H-BitLinear)')
-    
-    parser.add_argument('--output_dir', type=str, default='./output-quadratic-hbitlinear-2b-hf',
+    # Output parameters
+    parser.add_argument('--output_dir', type=str, default='./output-quadratic-1b-hf',
                       help='Output directory')
     parser.add_argument('--logging_steps', type=int, default=10,
                       help='Log every X steps')
     parser.add_argument('--save_steps', type=int, default=500,
                       help='Save checkpoint every X steps')
-    
-    parser.add_argument('--early_exit_threshold', type=float, default=0.95,
-                      help='Confidence threshold for early exit')
-    
-    parser.add_argument('--quadratic_constant', type=float, default=0.3,
-                      help='Constant c in quadratic dropout: p_l = c·(l/L)²')
     parser.add_argument('--checkpoint_path', type=str, default=None,
                       help='Path to checkpoint to load (optional)')
     
     return parser.parse_args()
 
-
 def main():
-    """Main training function for 2B parameter H-BitLinear quadratic schedule model."""
+    """Main training function for 1B parameter HF-compatible model."""
     args = parse_args()
     
-    # Setup logging
+    
     setup_logging(args.output_dir)
     logger = logging.getLogger(__name__)
     
     logger.info("=" * 80)
-    logger.info("2B PARAMETER H-BITLINEAR BITNET TRAINING - H200 GPU SCALING STUDY (HF COMPATIBLE)")
+    logger.info("1B PARAMETER BITNET TRAINING - H200 GPU SCALING STUDY (HF COMPATIBLE)")
     logger.info("=" * 80)
-    logger.info("Features: HF Compatible + H-BitLinear + Layer Dropout + BitLinear + Early Exit + Quadratic Schedule + FP16")
-    logger.info("Target: ~2.1B parameters (increased from 1.94B)")
-    logger.info("Memory: ~7.2GB FP16 (fits comfortably in H200's 141GB)")
+    logger.info("Features: HF Compatible + Layer Dropout + BitLinear + Early Exit + Quadratic Schedule + FP16")
+    logger.info("Target: ~963M parameters (close to 1B)")
+    logger.info("Memory: ~3.6GB FP16 (fits comfortably in H200's 141GB)")
     logger.info("=" * 80)
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -449,26 +443,33 @@ def main():
         num_key_value_heads=args.num_key_value_heads,
         intermediate_size=args.intermediate_size,
         max_position_embeddings=args.max_length,
-        activation_bits=args.activation_bits,  # H-BitLinear: 4-bit activations
-        weight_bits=args.weight_bits,  # H-BitLinear: 1-bit weights
         use_layer_skipping=True,
         skip_probability=0.1,
-        min_layers_to_keep=8, 
-        use_early_exit=True,  
-        early_exit_threshold=args.early_exit_threshold, 
-        dropout_schedule='quadratic', 
+        min_layers_to_keep=4,
+        use_early_exit=True , 
+        early_exit_threshold=args.early_exit_threshold,
+        dropout_schedule='quadratic',
         quadratic_constant=args.quadratic_constant
     )
     
     
-    logger.info("Initializing 2B parameter H-BitLinear BitNet model (HF Compatible)...")
+    logger.info("Initializing 1B parameter BitNet model (HF Compatible)...")
+    model = BitNetForCausalLM(config)
+    model.to(device)
     
+    scaler = GradScaler()
+    
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    logger.info(f"Model Parameters: {total_params:,} total, {trainable_params:,} trainable")
+    logger.info(f"Model Size: {total_params * 4 / (1024**3):.2f} GB (FP32), {total_params * 2 / (1024**3):.2f} GB (FP16)")
+    logger.info(f"Using FP16 precision for training and saving")
     
     logger.info("=" * 60)
-    logger.info("2B PARAMETER H-BITLINEAR CONFIGURATION (HF COMPATIBLE)")
+    logger.info("1B PARAMETER CONFIGURATION (HF COMPATIBLE)")
     logger.info("=" * 60)
     logger.info(f"Model Architecture:")
-    logger.info(f"  - Model Type: Hugging Face Compatible H-BitLinear BitNet")
+    logger.info(f"  - Model Type: Hugging Face Compatible BitNet")
     logger.info(f"  - Hidden Size: {config.hidden_size}")
     logger.info(f"  - Number of Layers: {config.num_hidden_layers}")
     logger.info(f"  - Number of Attention Heads: {config.num_attention_heads}")
@@ -476,12 +477,6 @@ def main():
     logger.info(f"  - Intermediate Size: {config.intermediate_size}")
     logger.info(f"  - Max Position Embeddings: {config.max_position_embeddings}")
     logger.info(f"  - Vocabulary Size: {config.vocab_size}")
-    logger.info(f"")
-    logger.info(f"H-BitLinear Configuration:")
-    logger.info(f"  - Activation Bits: {config.activation_bits}")
-    logger.info(f"  - Weight Bits: {config.weight_bits}")
-    logger.info(f"  - Hadamard Transform: Enabled")
-    logger.info(f"  - Layer Normalization: Pre-quantization")
     logger.info(f"")
     logger.info(f"Training Parameters:")
     logger.info(f"  - Learning Rate: {args.learning_rate}")
@@ -499,18 +494,6 @@ def main():
     logger.info(f"  - Quadratic Constant: {config.quadratic_constant}")
     logger.info("=" * 60)
     
-    model = BitNetForCausalLM(config)
-    model.to(device)
-    
-    
-    scaler = GradScaler()
-    
-    
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"Model Parameters: {total_params:,} total, {trainable_params:,} trainable")
-    logger.info(f"Model Size: {total_params * 4 / (1024**3):.2f} GB (FP32), {total_params * 2 / (1024**3):.2f} GB (FP16)")
-    logger.info(f"Using FP16 precision for training and saving")
     
     if args.checkpoint_path and os.path.exists(args.checkpoint_path):
         try:
@@ -522,9 +505,8 @@ def main():
             logger.info("Continuing with randomly initialized model")
     
     
-    
     logger.info("=" * 60)
-    logger.info("QUADRATIC SCHEDULE DETAILS (2B H-BITLINEAR MODEL)")
+    logger.info("QUADRATIC SCHEDULE DETAILS (1B MODEL)")
     logger.info("=" * 60)
     logger.info(f"Quadratic Constant (c): {args.quadratic_constant}")
     logger.info(f"Number of Layers (L): {config.num_hidden_layers}")
@@ -543,14 +525,9 @@ def main():
         betas=(0.9, 0.98)
     )
     
-    def lr_lambda(step):
-        warmup_steps = 100
-        if step < warmup_steps:
-            return step / warmup_steps
-        else:
-            return 0.5 * (1 + math.cos(math.pi * (step - warmup_steps) / (args.num_steps - warmup_steps)))
-    
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.num_steps, eta_min=1e-6
+    )
     
     train_dataloader = create_streaming_dataloader(
         dataset_name="HuggingFaceFW/fineweb-edu",
@@ -562,112 +539,64 @@ def main():
         text_column="text"
     )
     
-    # Training loop
-    logger.info("Starting 2B parameter H-BitLinear HF-compatible training...")
+    
+    logger.info("Starting 1B parameter HF-compatible training...")
     global_step = 0
     
-    # Lists to store training metrics for plotting
+    
     training_losses = []
     learning_rates = []
     training_steps = []
     
     for step in range(args.num_steps):
         try:
-            # Clear memory before allocation
+            
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
-            # Get batch
+            
             batch = next(iter(train_dataloader))
             
-            # Prepare inputs
             tensor_inputs = {
                 'input_ids': batch['input_ids'].to(device),
                 'attention_mask': batch['attention_mask'].to(device),
                 'labels': batch['labels'].to(device)
             }
             
-            # Forward pass with FP16 autocast
-            try:
-                with autocast('cuda'):
-                    outputs = model(**tensor_inputs)
-                    loss = outputs.loss
-            except TypeError:
-                # Fallback for older PyTorch versions
-                with autocast():
-                    outputs = model(**tensor_inputs)
-                    loss = outputs.loss
             
-            # Check for NaN loss
-            if torch.isnan(loss) or torch.isinf(loss):
-                logger.warning(f"NaN/Inf loss detected at step {global_step}, skipping this step")
-                optimizer.zero_grad()
-                continue
+            with torch.autocast(device_type="cuda"):
+                outputs = model(**tensor_inputs)
+                loss = outputs.loss
             
-            # Backward pass with gradient scaling
             scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+            optimizer.zero_grad()
             
-            try:
-                # Check for gradient overflow before optimizer step
-                scaler.unscale_(optimizer)
-                
-                # Check for gradient overflow
-                if torch.isfinite(scaler.scale.item()):
-                    # Check for NaN gradients
-                    has_nan_grad = False
-                    for param in model.parameters():
-                        if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
-                            has_nan_grad = True
-                            break
-                    
-                    if not has_nan_grad:
-                        # Gradient clipping for stability
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                        
-                                # Optimizer step with gradient scaling
-                        scaler.step(optimizer)
-                        scaler.update()
-                        scheduler.step()
-                        optimizer.zero_grad()
-                    else:
-                        logger.warning(f"NaN gradients detected at step {global_step}, skipping optimizer step")
-                        optimizer.zero_grad()
-                        scaler.update()
-                else:
-                    # Skip optimizer step if gradients overflowed
-                    logger.warning(f"Gradient overflow detected at step {global_step}, skipping optimizer step")
-                    optimizer.zero_grad()
-                    scaler.update()
-            except Exception as e:
-                logger.warning(f"Gradient scaling error at step {global_step}: {str(e)}")
-                # Fallback: clear gradients and continue
-                optimizer.zero_grad()
-                scaler.update()
-            
-            # Store metrics for plotting
             training_losses.append(loss.item())
             learning_rates.append(scheduler.get_last_lr()[0])
             training_steps.append(global_step)
             
-            # Logging
+            
             if global_step % args.logging_steps == 0:
                 logger.info(f"Step {global_step}: Loss = {loss:.4f}, LR = {scheduler.get_last_lr()[0]:.6e}")
                 logger.info(f"Quadratic constant: {args.quadratic_constant}, Early exit threshold: {args.early_exit_threshold}")
-                logger.info(f"FP16 Training: Enabled with gradient scaling (scale: {scaler.scale.item():.2f})")
-                logger.info(f"H-BitLinear: {config.activation_bits}-bit activations, {config.weight_bits}-bit weights")
+                logger.info(f"FP16 Training: Enabled with gradient scaling")
                 
-                # Memory usage logging
+                
                 if torch.cuda.is_available():
                     allocated = torch.cuda.memory_allocated() / 1024**3
                     reserved = torch.cuda.memory_reserved() / 1024**3
                     logger.info(f"GPU Memory (FP16) - Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB")
-            # Save checkpoint in Hugging Face format
+            
+            
             if global_step == args.save_steps:
                 checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                 model.save_pretrained(checkpoint_dir)
                 logger.info(f"Saved HF-compatible checkpoint to {checkpoint_dir}")
                 
-                # Clear memory after checkpoint save
+                
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
             
@@ -675,26 +604,24 @@ def main():
             
         except Exception as e:
             logger.error(f"Error at step {step}: {str(e)}")
-            # Clear memory on error
+            
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             continue
     
-    # Clear memory after training loop
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        logger.info("Cleared GPU memory after training loop")
+        
     
-    # Plot and save training loss graph
     try:
         plt.figure(figsize=(12, 8))
         
-        # Plot training loss
+        
         plt.subplot(2, 1, 1)
         plt.plot(training_steps, training_losses, 'b-', linewidth=2, label='Training Loss')
         plt.xlabel('Training Step')
         plt.ylabel('Loss')
-        plt.title('2B Parameter H-BitLinear BitNet Training Loss (HF Compatible + FP16)')
+        plt.title('1B Parameter BitNet Training Loss (HF Compatible)')
         plt.legend()
         plt.grid(True, alpha=0.3)
         
@@ -711,7 +638,7 @@ def main():
         plt.tight_layout()
         
         # Save the plot
-        plot_path = os.path.join(args.output_dir, 'quadratic_hbitlinear_2b_hf_training_loss.png')
+        plot_path = os.path.join(args.output_dir, 'quadratic_1b_training_loss.png')
         plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         logger.info(f"Training loss plot saved to: {plot_path}")
         plt.close()
@@ -729,13 +656,11 @@ def main():
         logger.info("Final GPU memory cleanup completed")
     
     logger.info("=" * 80)
-    logger.info("2B PARAMETER H-BITLINEAR TRAINING COMPLETED SUCCESSFULLY!")
+    logger.info("1B PARAMETER TRAINING COMPLETED SUCCESSFULLY!")
     logger.info("=" * 80)
-    logger.info("Features: HF Compatible + H-BitLinear + Layer Dropout + BitLinear + Early Exit + Quadratic Schedule + FP16")
+    logger.info("Features: HF Compatible + Layer Dropout + BitLinear + Early Exit + Quadratic Schedule + FP16")
     logger.info(f"Model Size: {total_params:,} parameters (~{total_params/1e9:.1f}B)")
-    logger.info(f"Memory Usage: ~7.2GB FP16 (H200: 141GB)")
-    logger.info(f"Activation Bits: {config.activation_bits}")
-    logger.info(f"Weight Bits: {config.weight_bits}")
+    logger.info(f"Memory Usage: ~3.6GB FP16 (H200: 141GB)")
     logger.info(f"Quadratic Constant: {args.quadratic_constant}")
     logger.info(f"Early Exit Threshold: {args.early_exit_threshold}")
     logger.info(f"Final model saved to: {final_model_dir}")
