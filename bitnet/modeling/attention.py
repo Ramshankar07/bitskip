@@ -120,6 +120,8 @@ class BitNetAttention(nn.Module):
         
         assert seq_len_k == seq_len_v, f"Key and value sequence lengths must match: {seq_len_k} vs {seq_len_v}"
         
+        print(f"DEBUG: bitnet_kernels.is_available = {bitnet_kernels.is_available}")
+        
         if bitnet_kernels.is_available:
             print(f"DEBUG: Using CUDA kernel for attention computation")
             print(f"DEBUG: q stats before CUDA: min={q.min():.4f}, max={q.max():.4f}, mean={q.mean():.4f}")
@@ -167,11 +169,22 @@ class BitNetAttention(nn.Module):
             
             return result
         else:
+            print(f"DEBUG: Using CPU implementation for attention computation")
+            print(f"DEBUG: q stats before CPU: min={q.min():.4f}, max={q.max():.4f}, mean={q.mean():.4f}")
+            print(f"DEBUG: k stats before CPU: min={k.min():.4f}, max={k.max():.4f}, mean={k.mean():.4f}")
+            print(f"DEBUG: scale = {self.scale}")
+            
             # Calculate attention scores
             # q shape: (batch_size, num_heads, seq_len_q, head_dim)
             # k shape: (batch_size, num_heads, seq_len_k, head_dim)
             # attn_scores shape: (batch_size, num_heads, seq_len_q, seq_len_k)
             attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+            print(f"DEBUG: After matmul - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
+            
+            if torch.isnan(attn_scores).any() or torch.isinf(attn_scores).any():
+                print(f"ERROR: NaN/Inf detected in attn_scores after matmul!")
+                print(f"ERROR: NaN count: {torch.isnan(attn_scores).sum()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_scores).sum()}")
             
             # Verify attention scores shape
             expected_scores_shape = (batch_size, num_heads, seq_len_q, seq_len_k)
@@ -202,8 +215,17 @@ class BitNetAttention(nn.Module):
                 attn_scores = attn_scores + (1.0 - attention_mask) * -10000.0
             
             # Apply softmax and dropout
+            print(f"DEBUG: Before softmax (CPU) - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
             attn_weights = F.softmax(attn_scores, dim=-1)
+            print(f"DEBUG: After softmax (CPU) - attn_weights stats: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}, mean={attn_weights.mean():.4f}")
+            
+            if torch.isnan(attn_weights).any() or torch.isinf(attn_weights).any():
+                print(f"ERROR: NaN/Inf detected in attn_weights after softmax (CPU)!")
+                print(f"ERROR: NaN count: {torch.isnan(attn_weights).sum()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_weights).sum()}")
+            
             attn_weights = self.dropout(attn_weights)
+            print(f"DEBUG: After dropout (CPU) - attn_weights stats: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}, mean={attn_weights.mean():.4f}")
             
             # Verify attention weights shape before matmul
             expected_weights_shape = (batch_size, num_heads, seq_len_q, seq_len_k)
@@ -213,7 +235,15 @@ class BitNetAttention(nn.Module):
             # attn_weights shape: (batch_size, num_heads, seq_len_q, seq_len_k)
             # v shape: (batch_size, num_heads, seq_len_v, head_dim)
             # output shape: (batch_size, num_heads, seq_len_q, head_dim)
+            print(f"DEBUG: Before final matmul (CPU) - attn_weights stats: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}, mean={attn_weights.mean():.4f}")
+            print(f"DEBUG: Before final matmul (CPU) - v stats: min={v.min():.4f}, max={v.max():.4f}, mean={v.mean():.4f}")
             attn_output = torch.matmul(attn_weights, v)
+            print(f"DEBUG: After final matmul (CPU) - attn_output stats: min={attn_output.min():.4f}, max={attn_output.max():.4f}, mean={attn_output.mean():.4f}")
+            
+            if torch.isnan(attn_output).any() or torch.isinf(attn_output).any():
+                print(f"ERROR: NaN/Inf detected in attn_output after final matmul (CPU)!")
+                print(f"ERROR: NaN count: {torch.isnan(attn_output).sum()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_output).sum()}")
             
             # Verify output shape
             expected_output_shape = (batch_size, num_heads, seq_len_q, head_dim)
