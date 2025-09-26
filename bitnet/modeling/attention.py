@@ -121,21 +121,51 @@ class BitNetAttention(nn.Module):
         assert seq_len_k == seq_len_v, f"Key and value sequence lengths must match: {seq_len_k} vs {seq_len_v}"
         
         if bitnet_kernels.is_available:
+            print(f"DEBUG: Using CUDA kernel for attention computation")
+            print(f"DEBUG: q stats before CUDA: min={q.min():.4f}, max={q.max():.4f}, mean={q.mean():.4f}")
+            print(f"DEBUG: k stats before CUDA: min={k.min():.4f}, max={k.max():.4f}, mean={k.mean():.4f}")
+            print(f"DEBUG: scale = {self.scale}")
+            
             # Use CUDA kernel for attention computation
             attn_scores = attention_scores_cuda(q, k, self.scale)
+            print(f"DEBUG: After attention_scores_cuda - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
+            
+            if torch.isnan(attn_scores).any() or torch.isinf(attn_scores).any():
+                print(f"ERROR: NaN/Inf detected in attn_scores after CUDA kernel!")
+                print(f"ERROR: NaN count: {torch.isnan(attn_scores).sum()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_scores).sum()}")
             
             if attention_mask is not None:
                 # Prepare attention mask for CUDA kernel
                 if attention_mask.dim() == 2:
                     attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
                 attn_scores = attn_scores + attention_mask
+                print(f"DEBUG: After attention mask - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
             
             # Apply softmax and dropout
+            print(f"DEBUG: Before softmax - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
             attn_weights = F.softmax(attn_scores, dim=-1)
+            print(f"DEBUG: After softmax - attn_weights stats: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}, mean={attn_weights.mean():.4f}")
+            
+            if torch.isnan(attn_weights).any() or torch.isinf(attn_weights).any():
+                print(f"ERROR: NaN/Inf detected in attn_weights after softmax!")
+                print(f"ERROR: NaN count: {torch.isnan(attn_weights).sum()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_weights).sum()}")
+            
             attn_weights = self.dropout(attn_weights)
+            print(f"DEBUG: After dropout - attn_weights stats: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}, mean={attn_weights.mean():.4f}")
             
             # Compute attention output using CUDA kernel
-            return attention_output_cuda(attn_weights, v)
+            print(f"DEBUG: Before attention_output_cuda - v stats: min={v.min():.4f}, max={v.max():.4f}, mean={v.mean():.4f}")
+            result = attention_output_cuda(attn_weights, v)
+            print(f"DEBUG: After attention_output_cuda - result stats: min={result.min():.4f}, max={result.max():.4f}, mean={result.mean():.4f}")
+            
+            if torch.isnan(result).any() or torch.isinf(result).any():
+                print(f"ERROR: NaN/Inf detected in result after attention_output_cuda!")
+                print(f"ERROR: NaN count: {torch.isnan(result).sum()}")
+                print(f"ERROR: Inf count: {torch.isinf(result).sum()}")
+            
+            return result
         else:
             # Calculate attention scores
             # q shape: (batch_size, num_heads, seq_len_q, head_dim)
