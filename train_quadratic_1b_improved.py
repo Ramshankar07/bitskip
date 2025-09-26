@@ -247,11 +247,13 @@ class BitNetForCausalLM(nn.Module):
             'input_ids': input_ids,
             'attention_mask': attention_mask,
             'labels': labels,
-            'output_hidden_states': output_hidden_states
+            'output_hidden_states': output_hidden_states,
+            'training_step': 0  # Add training step to prevent early exit issues
         }
         
-        # Forward pass through internal model
-        outputs = self.model(**model_inputs)
+        # Forward pass through internal model without loss computation
+        model_inputs_no_loss = {k: v for k, v in model_inputs.items() if k != 'labels'}
+        outputs = self.model(**model_inputs_no_loss)
         
         # Get logits from the internal model's LM head
         if hasattr(outputs, 'logits'):
@@ -261,21 +263,26 @@ class BitNetForCausalLM(nn.Module):
             hidden_states = outputs.last_hidden_state if hasattr(outputs, 'last_hidden_state') else outputs[0]
             logits = self.model.lm_head(hidden_states)
         
-        # Compute loss if labels are provided
+        # Compute loss if labels are provided (do it ourselves to avoid internal model issues)
         loss = None
         if labels is not None:
             # Shift so that tokens < n predict n
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             
-            # Flatten the tokens
-            loss_fct = nn.CrossEntropyLoss()
-            shift_logits = shift_logits.view(-1, self.config.vocab_size)
-            shift_labels = shift_labels.view(-1)
-            
-            # Enable model parallelism
-            shift_labels = shift_labels.to(shift_logits.device)
-            loss = loss_fct(shift_logits, shift_labels)
+            # Check for empty sequences that would cause NaN
+            if shift_logits.size(1) == 0:
+                # Handle empty sequence case
+                loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
+            else:
+                # Flatten the tokens
+                loss_fct = nn.CrossEntropyLoss()
+                shift_logits = shift_logits.view(-1, self.config.vocab_size)
+                shift_labels = shift_labels.view(-1)
+                
+                # Enable model parallelism
+                shift_labels = shift_labels.to(shift_logits.device)
+                loss = loss_fct(shift_logits, shift_labels)
         
         if not return_dict:
             output = (logits,)
@@ -557,10 +564,38 @@ def main():
                 'labels': batch['labels'].to(device)
             }
             
+            # Debug: Check input data
+            if global_step == 0:
+                logger.info(f"Input shapes: input_ids={tensor_inputs['input_ids'].shape}, labels={tensor_inputs['labels'].shape}")
+                logger.info(f"Input IDs range: {tensor_inputs['input_ids'].min()} to {tensor_inputs['input_ids'].max()}")
+                logger.info(f"Labels range: {tensor_inputs['labels'].min()} to {tensor_inputs['labels'].max()}")
+                logger.info(f"Attention mask shape: {tensor_inputs['attention_mask'].shape}")
+                
+                # Check for empty sequences
+                seq_lengths = tensor_inputs['attention_mask'].sum(dim=1)
+                if (seq_lengths < 2).any():
+                    logger.warning(f"Found sequences with length < 2: {seq_lengths}")
+                    logger.warning("This could cause NaN loss due to empty shift_logits")
+            
             
             with torch.autocast(device_type="cuda"):
                 outputs = model(**tensor_inputs)
                 loss = outputs.loss
+                
+                # Debug: Check for NaN in logits and loss
+                if hasattr(outputs, 'logits'):
+                    logits = outputs.logits
+                    if torch.isnan(logits).any() or torch.isinf(logits).any():
+                        logger.error(f"NaN/Inf detected in logits at step {global_step}")
+                        logger.error(f"Logits shape: {logits.shape}, min: {logits.min()}, max: {logits.max()}")
+                        continue
+                
+                if torch.isnan(loss) or torch.isinf(loss):
+                    logger.error(f"NaN/Inf loss detected at step {global_step}")
+                    logger.error(f"Loss value: {loss}")
+                    if hasattr(outputs, 'logits'):
+                        logger.error(f"Logits stats: min={outputs.logits.min()}, max={outputs.logits.max()}, mean={outputs.logits.mean()}")
+                    continue
             
             # Check for NaN loss
             if torch.isnan(loss) or torch.isinf(loss):
