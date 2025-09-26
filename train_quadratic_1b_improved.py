@@ -208,11 +208,13 @@ class BitNetForCausalLM(nn.Module):
     def _init_weights(self, module):
         """Initialize weights using standard initialization for stability."""
         if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
+            # Use Xavier uniform initialization for better stability
+            torch.nn.init.xavier_uniform_(module.weight)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
+            # Use Xavier uniform initialization for embeddings
+            torch.nn.init.xavier_uniform_(module.weight)
         elif isinstance(module, nn.LayerNorm):
             if hasattr(module, 'weight') and module.weight is not None:
                 torch.nn.init.ones_(module.weight)
@@ -253,6 +255,14 @@ class BitNetForCausalLM(nn.Module):
         
         # Forward pass through internal model without loss computation
         model_inputs_no_loss = {k: v for k, v in model_inputs.items() if k != 'labels'}
+        
+        # Debug: Check model weights before forward pass
+        if hasattr(self.model, 'embed_tokens'):
+            embed_weight = self.model.embed_tokens.weight
+            if torch.isnan(embed_weight).any() or torch.isinf(embed_weight).any():
+                logger.error(f"NaN/Inf detected in embedding weights")
+                logger.error(f"Embedding weight stats: min={embed_weight.min()}, max={embed_weight.max()}, mean={embed_weight.mean()}")
+        
         outputs = self.model(**model_inputs_no_loss)
         
         # Get logits from the internal model's LM head
@@ -374,7 +384,7 @@ def parse_args():
                        help='Number of key-value heads for GQA (default: 4 for 1B parameters)')
     parser.add_argument('--intermediate_size', type=int, default=3072,
                        help='Intermediate size for feed-forward network')
-    parser.add_argument('--batch_size', type=int, default=4,
+    parser.add_argument('--batch_size', type=int, default=2,
                       help='Training batch size (default: 2 for memory efficiency)')
     parser.add_argument('--learning_rate', type=float, default=5e-5,
                       help='Learning rate (default: 5e-5)')
@@ -443,7 +453,9 @@ def main():
         num_key_value_heads=args.num_key_value_heads,
         intermediate_size=args.intermediate_size,
         max_position_embeddings=args.max_length,
-        use_layer_skipping=True,
+        activation_bits=8,  # Standard activation bits
+        weight_bits=2,      # Standard weight bits
+        use_layer_skipping=True, 
         skip_probability=0.1,
         min_layers_to_keep=4,
         use_early_exit=False,  # Disabled for memory efficiency
