@@ -271,8 +271,8 @@ class BitNetForCausalLM(nn.Module):
         
         # Forward pass through internal model
         # Debug: Check early exit config before forward pass
-        if hasattr(self.model.model, 'config'):
-            internal_use_early_exit = getattr(self.model.model.config, 'use_early_exit', 'Not found')
+        if hasattr(self.model, 'config'):
+            internal_use_early_exit = getattr(self.model.config, 'use_early_exit', 'Not found')
             if hasattr(self, '_debug_step') and self._debug_step < 3:  # Only log first few steps
                 print(f"Debug step {self._debug_step}: Internal use_early_exit = {internal_use_early_exit}")
                 self._debug_step = getattr(self, '_debug_step', 0) + 1
