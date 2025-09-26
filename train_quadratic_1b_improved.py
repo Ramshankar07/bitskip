@@ -206,29 +206,13 @@ class BitNetForCausalLM(nn.Module):
         self.apply(self._init_weights)
     
     def _init_weights(self, module):
-        """Initialize weights for BitNet with quantization-aware strategy."""
+        """Initialize weights using standard initialization for stability."""
         if isinstance(module, nn.Linear):
-            # Use normal distribution with careful std selection
-            # Larger std ensures weights spread across {-1, 0, +1} after quantization
-            std = self.config.initializer_range if hasattr(self.config, 'initializer_range') else 0.02
-            
-            # For BitNet, we want slightly larger initialization to survive quantization
-            if hasattr(module, 'weight_quantizer') or 'bitnet' in module.__class__.__name__.lower():
-                std = std * 1.5  # Increase spread for quantized layers
-                
-            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
-            
-            # Alternative: Uniform initialization with wider range
-            # bound = np.sqrt(6.0 / (module.weight.size(0) + module.weight.size(1)))
-            # torch.nn.init.uniform_(module.weight, -bound, bound)
-            
+            torch.nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
-                
         elif isinstance(module, nn.Embedding):
-            std = self.config.initializer_range if hasattr(self.config, 'initializer_range') else 0.02
-            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
-            
+            torch.nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
         elif isinstance(module, nn.LayerNorm):
             if hasattr(module, 'weight') and module.weight is not None:
                 torch.nn.init.ones_(module.weight)
@@ -466,7 +450,8 @@ def main():
     model = BitNetForCausalLM(config)
     model.to(device)
     
-    scaler = GradScaler()
+    # Initialize FP16 scaler for gradient scaling with more conservative settings
+    scaler = GradScaler(init_scale=2**10, growth_factor=2.0, backoff_factor=0.5, growth_interval=2000)
     
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -577,10 +562,33 @@ def main():
                 outputs = model(**tensor_inputs)
                 loss = outputs.loss
             
+            # Check for NaN loss
+            if torch.isnan(loss) or torch.isinf(loss):
+                logger.warning(f"NaN/Inf loss detected at step {global_step}, skipping step")
+                optimizer.zero_grad()
+                continue
+            
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
+            
+            # Check for NaN gradients before optimizer step
+            has_nan_grad = False
+            for param in model.parameters():
+                if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
+                    has_nan_grad = True
+                    break
+            
+            if not has_nan_grad:
+                # Gradient clipping for stability
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                
+                scaler.step(optimizer)
+                scaler.update()
+                scheduler.step()
+            else:
+                logger.warning(f"NaN gradients detected at step {global_step}, skipping optimizer step")
+                scaler.update()
+            
             optimizer.zero_grad()
             
             training_losses.append(loss.item())
