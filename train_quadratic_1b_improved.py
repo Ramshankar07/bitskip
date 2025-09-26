@@ -206,20 +206,33 @@ class BitNetForCausalLM(nn.Module):
         self.apply(self._init_weights)
     
     def _init_weights(self, module):
-        """Initialize weights using standard initialization for stability."""
+        """Initialize weights using conservative initialization for BitNet stability."""
         if isinstance(module, nn.Linear):
-            # Use Xavier uniform initialization for better stability
-            torch.nn.init.xavier_uniform_(module.weight)
+            # Use smaller initialization range for BitNet
+            std = self.config.initializer_range
+            # Ensure initializer_range is small enough
+            if std > 0.02:
+                std = 0.02  # Cap at 0.02 for safety
+            
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
+                
         elif isinstance(module, nn.Embedding):
-            # Use Xavier uniform initialization for embeddings
-            torch.nn.init.xavier_uniform_(module.weight)
-        elif isinstance(module, nn.LayerNorm):
+            # Conservative embedding initialization
+            std = min(self.config.initializer_range, 0.02)
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            
+        elif isinstance(module, (nn.LayerNorm, nn.modules.normalization.LayerNorm)):
             if hasattr(module, 'weight') and module.weight is not None:
                 torch.nn.init.ones_(module.weight)
             if hasattr(module, 'bias') and module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
+        
+        # Handle RMSNorm if your model uses it
+        elif module.__class__.__name__ == 'RMSNorm':
+            if hasattr(module, 'weight') and module.weight is not None:
+                torch.nn.init.ones_(module.weight)
     
     def forward(
         self,
@@ -355,6 +368,21 @@ class BitNetForCausalLM(nn.Module):
         return model
 
 
+def verify_model_initialization(model):
+    """Check for NaN/Inf in model parameters."""
+    for name, param in model.named_parameters():
+        if torch.isnan(param).any():
+            print(f"NaN found in {name}")
+            return False
+        if torch.isinf(param).any():
+            print(f"Inf found in {name}")
+            return False
+        
+        # Check for extreme values
+        if param.abs().max() > 100:
+            print(f"Large values in {name}: max={param.abs().max()}")
+    return True
+
 def setup_logging(log_dir: str):
     """Set up logging configuration."""
     log_dir = os.path.expanduser(log_dir)
@@ -467,6 +495,12 @@ def main():
     
     logger.info("Initializing 1B parameter BitNet model (HF Compatible)...")
     model = BitNetForCausalLM(config)
+    
+    # Verify model initialization
+    if not verify_model_initialization(model):
+        logger.error("Model initialization contains NaN/Inf values!")
+        raise RuntimeError("Model initialization failed - contains NaN/Inf values")
+    
     model.to(device)
     
     # Initialize FP16 scaler for gradient scaling with more conservative settings
