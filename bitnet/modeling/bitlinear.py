@@ -162,8 +162,8 @@ class BitLinear(nn.Module):
             
             # Debug scaling factors
             print(f"DEBUG: BitLinear - w_scale: {w_scale:.6f}, x_scale: {x_scale:.6f}, ratio: {w_scale/x_scale:.6f}")
-            print(f"DEBUG: BitLinear - x_q stats: min={x_q.min():.4f}, max={x_q.max():.4f}, mean={x_q.mean():.4f}")
-            print(f"DEBUG: BitLinear - weight stats: min={self.weight.min():.4f}, max={self.weight.max():.4f}, mean={self.weight.mean():.4f}")
+            print(f"DEBUG: BitLinear - x_q stats: min={x_q.min().item():.4f}, max={x_q.max().item():.4f}, mean={x_q.mean().item():.4f}")
+            print(f"DEBUG: BitLinear - weight stats: min={self.weight.min().item():.4f}, max={self.weight.max().item():.4f}, mean={self.weight.mean().item():.4f}")
             
             # Check for extreme scaling
             if w_scale / x_scale > 1000:
@@ -183,12 +183,12 @@ class BitLinear(nn.Module):
             else:
                 output = F.linear(x_q, self.weight, self.bias) / x_scale
             
-            print(f"DEBUG: BitLinear - output before squared_relu: min={output.min():.4f}, max={output.max():.4f}, mean={output.mean():.4f}")
+            print(f"DEBUG: BitLinear - output before squared_relu: min={output.min().item():.4f}, max={output.max().item():.4f}, mean={output.mean().item():.4f}")
             
             if torch.isnan(output).any() or torch.isinf(output).any():
                 print(f"ERROR: NaN/Inf detected in BitLinear output before squared_relu!")
-                print(f"ERROR: NaN count: {torch.isnan(output).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(output).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(output).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(output).sum().item()}")
             
             self.weight.data = w_original
         else:
