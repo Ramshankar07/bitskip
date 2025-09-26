@@ -270,6 +270,13 @@ class BitNetForCausalLM(nn.Module):
         model_inputs_no_loss = {k: v for k, v in model_inputs.items() if k != 'labels'}
         
         # Forward pass through internal model
+        # Debug: Check early exit config before forward pass
+        if hasattr(self.model.model, 'config'):
+            internal_use_early_exit = getattr(self.model.model.config, 'use_early_exit', 'Not found')
+            if hasattr(self, '_debug_step') and self._debug_step < 3:  # Only log first few steps
+                print(f"Debug step {self._debug_step}: Internal use_early_exit = {internal_use_early_exit}")
+                self._debug_step = getattr(self, '_debug_step', 0) + 1
+        
         outputs = self.model(**model_inputs_no_loss)
         
         # Get logits from the internal model's LM head
@@ -494,6 +501,20 @@ def main():
     if not verify_model_initialization(model):
         logger.error("Model initialization contains NaN/Inf values!")
         raise RuntimeError("Model initialization failed - contains NaN/Inf values")
+    
+    # Verify early exit configuration
+    if hasattr(model.model, 'early_exit_heads'):
+        logger.info(f"Model has {len(model.model.early_exit_heads)} early exit heads")
+    else:
+        logger.info("Model does not have early_exit_heads attribute")
+    
+    # Check internal config
+    internal_config = model.model.config if hasattr(model.model, 'config') else None
+    if internal_config:
+        logger.info(f"Internal use_early_exit: {getattr(internal_config, 'use_early_exit', 'Not found')}")
+        logger.info(f"Internal early_exit_threshold: {getattr(internal_config, 'early_exit_threshold', 'Not found')}")
+    else:
+        logger.warning("Could not access internal model config")
     
     model.to(device)
     
