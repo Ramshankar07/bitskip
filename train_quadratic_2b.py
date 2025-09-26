@@ -52,14 +52,17 @@ from bitnet.utils.default_config import DefaultConfig
 # Load environment variables
 load_dotenv()
 
-# Disable HuggingFace caching by using temporary directory
-import tempfile
-temp_dir = tempfile.mkdtemp()
-os.environ["HF_DATASETS_CACHE"] = temp_dir
-os.environ["TRANSFORMERS_CACHE"] = temp_dir
-os.environ["HF_HOME"] = temp_dir
+# Completely disable HuggingFace caching
+os.environ["HF_DATASETS_CACHE"] = "/dev/null"
+os.environ["TRANSFORMERS_CACHE"] = "/dev/null"
+os.environ["HF_HOME"] = "/dev/null"
 os.environ["HF_DATASETS_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["HF_DATASETS_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["HF_DATASETS_DISABLE_TELEMETRY"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 class BitNetConfig:
     """
@@ -430,8 +433,8 @@ def main():
             os.getenv("TOKENIZER_NAME", "meta-llama/Meta-Llama-3-8B-Instruct"),
             token=os.getenv("HUGGINGFACE_TOKEN"),
             force_download=False,
-            cache_dir=temp_dir,
-            local_files_only=False,
+            local_files_only=True,
+            use_fast=True,
         )
         tokenizer.pad_token = tokenizer.eos_token
         actual_vocab_size = len(tokenizer)
@@ -550,8 +553,7 @@ def main():
         batch_size=args.batch_size,
         max_length=args.max_length,
         streaming=True,
-        text_column="text",
-        cache_dir=None
+        text_column="text"
     )
     
     # Training loop
