@@ -276,7 +276,31 @@ class BitNetForCausalLM(nn.Module):
                 logger.error(f"NaN/Inf detected in embedding weights")
                 logger.error(f"Embedding weight stats: min={embed_weight.min()}, max={embed_weight.max()}, mean={embed_weight.mean()}")
         
-        outputs = self.model(**model_inputs_no_loss)
+        # Debug: Check all model parameters for NaN/Inf
+        for name, param in self.model.named_parameters():
+            if torch.isnan(param).any() or torch.isinf(param).any():
+                logger.error(f"NaN/Inf detected in {name}")
+                logger.error(f"Parameter stats: min={param.min()}, max={param.max()}, mean={param.mean()}")
+                break
+        
+        # Try forward pass step by step to isolate the issue
+        try:
+            # First, try just the embedding
+            if hasattr(self.model.model, 'embed_tokens'):
+                embedded = self.model.model.embed_tokens(input_ids)
+                logger.info(f"Embedded shape: {embedded.shape}, stats: min={embedded.min():.4f}, max={embedded.max():.4f}, mean={embedded.mean():.4f}")
+                
+                if torch.isnan(embedded).any() or torch.isinf(embedded).any():
+                    logger.error("NaN/Inf detected in embeddings!")
+                    return CausalLMOutput(loss=torch.tensor(0.0, device=input_ids.device, requires_grad=True), logits=torch.zeros(input_ids.shape[0], input_ids.shape[1], self.config.vocab_size, device=input_ids.device))
+            
+            outputs = self.model(**model_inputs_no_loss)
+        except Exception as e:
+            logger.error(f"Error during forward pass: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return dummy outputs to prevent crash
+            return CausalLMOutput(loss=torch.tensor(0.0, device=input_ids.device, requires_grad=True), logits=torch.zeros(input_ids.shape[0], input_ids.shape[1], self.config.vocab_size, device=input_ids.device))
         
         # Get logits from the internal model's LM head
         if hasattr(outputs, 'logits'):
