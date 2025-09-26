@@ -352,8 +352,8 @@ class BitNetModel(nn.Module):
                 if output_hidden_states:
                     all_hidden_states.append(hidden_states)
                 
-                # Compute early exit loss if not skipped
-                if self.training:
+                # Compute early exit loss if not skipped and early exit is enabled
+                if self.training and self.config.use_early_exit:
                     with torch.autograd.profiler.record_function("EarlyExitLoss"):
                         layer_loss = compute_early_exit_loss_per_layer(
                             hidden_states=hidden_states,
@@ -385,8 +385,8 @@ class BitNetModel(nn.Module):
                 loss_fct = nn.CrossEntropyLoss()
                 loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
                 
-                # Add early exit losses if any
-                if self.training and early_exit_losses:
+                # Add early exit losses if any and early exit is enabled
+                if self.training and early_exit_losses and self.config.use_early_exit:
                     early_exit_loss = compute_early_exit_loss(
                         all_hidden_states, # Pass all hidden states for loss computation
                         labels,
