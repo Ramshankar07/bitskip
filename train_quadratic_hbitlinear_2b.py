@@ -374,7 +374,7 @@ def parse_args():
                        help='Number of key-value heads for GQA (default: 4 for ~2B parameters)')
     parser.add_argument('--intermediate_size', type=int, default=4096,
                        help='Intermediate size for feed-forward network')
-    parser.add_argument('--batch_size', type=int, default=1,
+    parser.add_argument('--batch_size', type=int, default=4,
                       help='Training batch size (default: 1 for stability)')
     parser.add_argument('--learning_rate', type=float, default=1e-5,
                       help='Learning rate (default: 1e-5 for stability)')
@@ -383,7 +383,6 @@ def parse_args():
     parser.add_argument('--num_steps', type=int, default=1000,
                       help='Number of training steps')
     
-    # H-BitLinear specific parameters
     parser.add_argument('--activation_bits', type=int, default=4,
                       help='Number of bits for activation quantization (default: 4 for H-BitLinear)')
     parser.add_argument('--weight_bits', type=int, default=1,
@@ -454,7 +453,7 @@ def main():
         use_layer_skipping=True,
         skip_probability=0.1,
         min_layers_to_keep=8, 
-        use_early_exit=True,  
+        use_early_exit=False,  # Disabled for memory efficiency
         early_exit_threshold=args.early_exit_threshold, 
         dropout_schedule='quadratic', 
         quadratic_constant=args.quadratic_constant
@@ -594,7 +593,7 @@ def main():
                     loss = outputs.loss
             except TypeError:
                 # Fallback for older PyTorch versions
-                with autocast():
+                with torch.autocast(device_type="cuda"):
                     outputs = model(**tensor_inputs)
                     loss = outputs.loss
             
@@ -623,7 +622,7 @@ def main():
                     if not has_nan_grad:
                         # Gradient clipping for stability
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                        
+                
                                 # Optimizer step with gradient scaling
                         scaler.step(optimizer)
                         scaler.update()

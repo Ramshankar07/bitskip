@@ -371,7 +371,7 @@ def parse_args():
                        help='Number of key-value heads for GQA (default: 4 for ~1.8B parameters)')
     parser.add_argument('--intermediate_size', type=int, default=4096,
                        help='Intermediate size for feed-forward network')
-    parser.add_argument('--batch_size', type=int, default=1,
+    parser.add_argument('--batch_size', type=int, default=4,
                       help='Training batch size (default: 1 for stability)')
     parser.add_argument('--learning_rate', type=float, default=1e-5,
                       help='Learning rate (default: 1e-5 for stability)')
@@ -445,7 +445,7 @@ def main():
         use_layer_skipping=True,
         skip_probability=0.1,
         min_layers_to_keep=8, 
-        use_early_exit=True,  
+        use_early_exit=False,  # Disabled for memory efficiency
         early_exit_threshold=args.early_exit_threshold, 
         dropout_schedule='quadratic', 
         quadratic_constant=args.quadratic_constant

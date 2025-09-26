@@ -381,7 +381,7 @@ def parse_args():
                        help='Number of key-value heads for GQA (default: 4 for 1B parameters)')
     parser.add_argument('--intermediate_size', type=int, default=3072,
                        help='Intermediate size for feed-forward network (MLP ratio = 2)')
-    parser.add_argument('--batch_size', type=int, default=2,
+    parser.add_argument('--batch_size', type=int, default=4,
                       help='Training batch size (default: 2 for memory efficiency)')
     parser.add_argument('--learning_rate', type=float, default=5e-5,
                       help='Learning rate (default: 5e-5)')
