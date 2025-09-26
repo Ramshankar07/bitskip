@@ -401,19 +401,40 @@ class BitNetModel(nn.Module):
                 # Get layer function
                 layer_fn = self._get_layer_fn(layer_idx)
                 
-                # Apply layer skipping
-                hidden_states, skip_mask = self.layer_skipping(
-                    hidden_states=hidden_states,
-                    layer_idx=layer_idx,
-                    layer_fn=layer_fn,
-                    attention_mask=attention_mask,
-                    layer_past=layer_past[layer_idx] if layer_past is not None else None,
-                    use_cache=use_cache,
-                    position_ids=position_ids,
-                    cache_position=cache_position,
-                    exit_layer=exit_layer,
-                    training_step=training_step
-                )
+                # Apply layer skipping only if enabled
+                if self.config.use_layer_skipping:
+                    hidden_states, skip_mask = self.layer_skipping(
+                        hidden_states=hidden_states,
+                        layer_idx=layer_idx,
+                        layer_fn=layer_fn,
+                        attention_mask=attention_mask,
+                        layer_past=layer_past[layer_idx] if layer_past is not None else None,
+                        use_cache=use_cache,
+                        position_ids=position_ids,
+                        cache_position=cache_position,
+                        exit_layer=exit_layer,
+                        training_step=training_step
+                    )
+                else:
+                    # Direct layer processing without skipping
+                    print(f"DEBUG: Direct layer processing for layer {layer_idx}")
+                    layer_outputs = layer_fn(
+                        hidden_states=hidden_states,
+                        attention_mask=attention_mask,
+                        layer_past=layer_past[layer_idx] if layer_past is not None else None,
+                        use_cache=use_cache,
+                        position_ids=position_ids,
+                        cache_position=cache_position
+                    )
+                    
+                    # Handle both cases: with and without cached key-values
+                    if isinstance(layer_outputs, tuple):
+                        hidden_states = layer_outputs[0]
+                    else:
+                        hidden_states = layer_outputs
+                    
+                    # No skipping when layer skipping is disabled
+                    skip_mask = torch.zeros(hidden_states.size(0), dtype=torch.bool, device=hidden_states.device)
                 
                 print(f"DEBUG: After layer {layer_idx} - hidden_states stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
                 

@@ -501,7 +501,7 @@ def main():
         max_position_embeddings=args.max_length,
         activation_bits=8,  # Standard activation bits
         weight_bits=2,      # Standard weight bits
-        use_layer_skipping=True, 
+        use_layer_skipping=False,  # Disabled for debugging
         skip_probability=0.1,
         min_layers_to_keep=4,
         use_early_exit=False,  # Disabled for memory efficiency
