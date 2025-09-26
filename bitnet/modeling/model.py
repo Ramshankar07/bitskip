@@ -71,7 +71,7 @@ def compute_early_exit_loss_per_layer(
     print(f"DEBUG: active_states shape: {active_states.shape}, active_targets shape: {active_targets.shape}")
     
     logits = lm_head(active_states)
-    print(f"DEBUG: Early exit logits shape: {logits.shape}, stats: min={logits.min():.4f}, max={logits.max():.4f}, mean={logits.mean():.4f}")
+    print(f"DEBUG: Early exit logits shape: {logits.shape}, stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, mean={logits.mean().item():.4f}")
     
     if torch.isnan(logits).any() or torch.isinf(logits).any():
         print(f"ERROR: NaN/Inf detected in early exit logits for layer {layer_idx}!")
@@ -129,7 +129,7 @@ def compute_early_exit_loss(
             print(f"DEBUG: hidden_states shape: {hidden_states.shape}, targets shape: {targets.shape}")
             
             logits = lm_head(hidden_states)
-            print(f"DEBUG: Early exit logits shape: {logits.shape}, stats: min={logits.min():.4f}, max={logits.max():.4f}, mean={logits.mean():.4f}")
+            print(f"DEBUG: Early exit logits shape: {logits.shape}, stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, mean={logits.mean().item():.4f}")
             
             if torch.isnan(logits).any() or torch.isinf(logits).any():
                 print(f"ERROR: NaN/Inf detected in early exit logits for layer {l}!")
@@ -371,13 +371,13 @@ class BitNetModel(nn.Module):
             
             # Get embeddings
             inputs_embeds = self.embed_tokens(input_ids)
-            print(f"DEBUG: After token embeddings - inputs_embeds stats: min={inputs_embeds.min():.4f}, max={inputs_embeds.max():.4f}, mean={inputs_embeds.mean():.4f}")
+            print(f"DEBUG: After token embeddings - inputs_embeds stats: min={inputs_embeds.min().item():.4f}, max={inputs_embeds.max().item():.4f}, mean={inputs_embeds.mean().item():.4f}")
             
             position_embeddings = self.embed_positions(position_ids)
-            print(f"DEBUG: After position embeddings - position_embeddings stats: min={position_embeddings.min():.4f}, max={position_embeddings.max():.4f}, mean={position_embeddings.mean():.4f}")
+            print(f"DEBUG: After position embeddings - position_embeddings stats: min={position_embeddings.min().item():.4f}, max={position_embeddings.max().item():.4f}, mean={position_embeddings.mean().item():.4f}")
             
             hidden_states = inputs_embeds + position_embeddings
-            print(f"DEBUG: After combining embeddings - hidden_states stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+            print(f"DEBUG: After combining embeddings - hidden_states stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
             
             if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                 print(f"ERROR: NaN/Inf detected in hidden_states after embeddings!")
@@ -390,7 +390,7 @@ class BitNetModel(nn.Module):
             
             # Process each layer
             for layer_idx in range(self.config.num_hidden_layers):
-                print(f"DEBUG: Before layer {layer_idx} - hidden_states stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+                print(f"DEBUG: Before layer {layer_idx} - hidden_states stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
                 
                 if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                     print(f"ERROR: NaN/Inf detected in hidden_states before layer {layer_idx}!")
@@ -436,7 +436,7 @@ class BitNetModel(nn.Module):
                     # No skipping when layer skipping is disabled
                     skip_mask = torch.zeros(hidden_states.size(0), dtype=torch.bool, device=hidden_states.device)
                 
-                print(f"DEBUG: After layer {layer_idx} - hidden_states stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+                print(f"DEBUG: After layer {layer_idx} - hidden_states stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
                 
                 if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                     print(f"ERROR: NaN/Inf detected in hidden_states after layer {layer_idx}!")
@@ -451,7 +451,7 @@ class BitNetModel(nn.Module):
                 # Compute early exit loss if not skipped and early exit is enabled
                 if self.training and self.config.use_early_exit:
                     print(f"DEBUG: Computing early exit loss for layer {layer_idx}")
-                    print(f"DEBUG: hidden_states shape: {hidden_states.shape}, stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+                    print(f"DEBUG: hidden_states shape: {hidden_states.shape}, stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
                     print(f"DEBUG: skip_mask: {skip_mask}")
                     print(f"DEBUG: curriculum_mask[{layer_idx}]: {self.early_exit_curriculum[layer_idx]}")
                     
@@ -482,10 +482,10 @@ class BitNetModel(nn.Module):
             
             # Compute logits
             print(f"DEBUG: Computing logits from hidden_states shape: {hidden_states.shape}")
-            print(f"DEBUG: hidden_states stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+            print(f"DEBUG: hidden_states stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
             
             logits = self.lm_head(hidden_states)
-            print(f"DEBUG: Logits shape: {logits.shape}, stats: min={logits.min():.4f}, max={logits.max():.4f}, mean={logits.mean():.4f}")
+            print(f"DEBUG: Logits shape: {logits.shape}, stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, mean={logits.mean().item():.4f}")
             
             if torch.isnan(logits).any() or torch.isinf(logits).any():
                 print(f"ERROR: NaN/Inf detected in logits!")

@@ -124,13 +124,13 @@ class BitNetAttention(nn.Module):
         
         if bitnet_kernels.is_available:
             print(f"DEBUG: Using CUDA kernel for attention computation")
-            print(f"DEBUG: q stats before CUDA: min={q.min():.4f}, max={q.max():.4f}, mean={q.mean():.4f}")
-            print(f"DEBUG: k stats before CUDA: min={k.min():.4f}, max={k.max():.4f}, mean={k.mean():.4f}")
+            print(f"DEBUG: q stats before CUDA: min={q.min().item():.4f}, max={q.max().item():.4f}, mean={q.mean().item():.4f}")
+            print(f"DEBUG: k stats before CUDA: min={k.min().item():.4f}, max={k.max().item():.4f}, mean={k.mean().item():.4f}")
             print(f"DEBUG: scale = {self.scale}")
             
             # Use CUDA kernel for attention computation
             attn_scores = attention_scores_cuda(q, k, self.scale)
-            print(f"DEBUG: After attention_scores_cuda - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
+            print(f"DEBUG: After attention_scores_cuda - attn_scores stats: min={attn_scores.min().item():.4f}, max={attn_scores.max().item():.4f}, mean={attn_scores.mean().item():.4f}")
             
             if torch.isnan(attn_scores).any() or torch.isinf(attn_scores).any():
                 print(f"ERROR: NaN/Inf detected in attn_scores after CUDA kernel!")
@@ -142,12 +142,12 @@ class BitNetAttention(nn.Module):
                 if attention_mask.dim() == 2:
                     attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
                 attn_scores = attn_scores + attention_mask
-                print(f"DEBUG: After attention mask - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
+                print(f"DEBUG: After attention mask - attn_scores stats: min={attn_scores.min().item():.4f}, max={attn_scores.max().item():.4f}, mean={attn_scores.mean().item():.4f}")
             
             # Apply softmax and dropout
-            print(f"DEBUG: Before softmax - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
+            print(f"DEBUG: Before softmax - attn_scores stats: min={attn_scores.min().item():.4f}, max={attn_scores.max().item():.4f}, mean={attn_scores.mean().item():.4f}")
             attn_weights = F.softmax(attn_scores, dim=-1)
-            print(f"DEBUG: After softmax - attn_weights stats: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}, mean={attn_weights.mean():.4f}")
+            print(f"DEBUG: After softmax - attn_weights stats: min={attn_weights.min().item():.4f}, max={attn_weights.max().item():.4f}, mean={attn_weights.mean().item():.4f}")
             
             if torch.isnan(attn_weights).any() or torch.isinf(attn_weights).any():
                 print(f"ERROR: NaN/Inf detected in attn_weights after softmax!")
@@ -155,12 +155,12 @@ class BitNetAttention(nn.Module):
                 print(f"ERROR: Inf count: {torch.isinf(attn_weights).sum()}")
             
             attn_weights = self.dropout(attn_weights)
-            print(f"DEBUG: After dropout - attn_weights stats: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}, mean={attn_weights.mean():.4f}")
+            print(f"DEBUG: After dropout - attn_weights stats: min={attn_weights.min().item():.4f}, max={attn_weights.max().item():.4f}, mean={attn_weights.mean().item():.4f}")
             
             # Compute attention output using CUDA kernel
-            print(f"DEBUG: Before attention_output_cuda - v stats: min={v.min():.4f}, max={v.max():.4f}, mean={v.mean():.4f}")
+            print(f"DEBUG: Before attention_output_cuda - v stats: min={v.min().item():.4f}, max={v.max().item():.4f}, mean={v.mean().item():.4f}")
             result = attention_output_cuda(attn_weights, v)
-            print(f"DEBUG: After attention_output_cuda - result stats: min={result.min():.4f}, max={result.max():.4f}, mean={result.mean():.4f}")
+            print(f"DEBUG: After attention_output_cuda - result stats: min={result.min().item():.4f}, max={result.max().item():.4f}, mean={result.mean().item():.4f}")
             
             if torch.isnan(result).any() or torch.isinf(result).any():
                 print(f"ERROR: NaN/Inf detected in result after attention_output_cuda!")
@@ -170,8 +170,8 @@ class BitNetAttention(nn.Module):
             return result
         else:
             print(f"DEBUG: Using CPU implementation for attention computation")
-            print(f"DEBUG: q stats before CPU: min={q.min():.4f}, max={q.max():.4f}, mean={q.mean():.4f}")
-            print(f"DEBUG: k stats before CPU: min={k.min():.4f}, max={k.max():.4f}, mean={k.mean():.4f}")
+            print(f"DEBUG: q stats before CPU: min={q.min().item():.4f}, max={q.max().item():.4f}, mean={q.mean().item():.4f}")
+            print(f"DEBUG: k stats before CPU: min={k.min().item():.4f}, max={k.max().item():.4f}, mean={k.mean().item():.4f}")
             print(f"DEBUG: scale = {self.scale}")
             
             # Calculate attention scores
@@ -189,7 +189,7 @@ class BitNetAttention(nn.Module):
                 print(f"WARNING: Very large Q/K values detected! Q max: {q.abs().max():.4f}, K max: {k.abs().max():.4f}")
             
             attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-            print(f"DEBUG: After matmul - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
+            print(f"DEBUG: After matmul - attn_scores stats: min={attn_scores.min().item():.4f}, max={attn_scores.max().item():.4f}, mean={attn_scores.mean().item():.4f}")
             
             if torch.isnan(attn_scores).any() or torch.isinf(attn_scores).any():
                 print(f"ERROR: NaN/Inf detected in attn_scores after matmul!")
@@ -225,9 +225,9 @@ class BitNetAttention(nn.Module):
                 attn_scores = attn_scores + (1.0 - attention_mask) * -10000.0
             
             # Apply softmax and dropout
-            print(f"DEBUG: Before softmax (CPU) - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
+            print(f"DEBUG: Before softmax (CPU) - attn_scores stats: min={attn_scores.min().item():.4f}, max={attn_scores.max().item():.4f}, mean={attn_scores.mean().item():.4f}")
             attn_weights = F.softmax(attn_scores, dim=-1)
-            print(f"DEBUG: After softmax (CPU) - attn_weights stats: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}, mean={attn_weights.mean():.4f}")
+            print(f"DEBUG: After softmax (CPU) - attn_weights stats: min={attn_weights.min().item():.4f}, max={attn_weights.max().item():.4f}, mean={attn_weights.mean().item():.4f}")
             
             if torch.isnan(attn_weights).any() or torch.isinf(attn_weights).any():
                 print(f"ERROR: NaN/Inf detected in attn_weights after softmax (CPU)!")
@@ -235,7 +235,7 @@ class BitNetAttention(nn.Module):
                 print(f"ERROR: Inf count: {torch.isinf(attn_weights).sum()}")
             
             attn_weights = self.dropout(attn_weights)
-            print(f"DEBUG: After dropout (CPU) - attn_weights stats: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}, mean={attn_weights.mean():.4f}")
+            print(f"DEBUG: After dropout (CPU) - attn_weights stats: min={attn_weights.min().item():.4f}, max={attn_weights.max().item():.4f}, mean={attn_weights.mean().item():.4f}")
             
             # Verify attention weights shape before matmul
             expected_weights_shape = (batch_size, num_heads, seq_len_q, seq_len_k)
@@ -245,10 +245,10 @@ class BitNetAttention(nn.Module):
             # attn_weights shape: (batch_size, num_heads, seq_len_q, seq_len_k)
             # v shape: (batch_size, num_heads, seq_len_v, head_dim)
             # output shape: (batch_size, num_heads, seq_len_q, head_dim)
-            print(f"DEBUG: Before final matmul (CPU) - attn_weights stats: min={attn_weights.min():.4f}, max={attn_weights.max():.4f}, mean={attn_weights.mean():.4f}")
-            print(f"DEBUG: Before final matmul (CPU) - v stats: min={v.min():.4f}, max={v.max():.4f}, mean={v.mean():.4f}")
+            print(f"DEBUG: Before final matmul (CPU) - attn_weights stats: min={attn_weights.min().item():.4f}, max={attn_weights.max().item():.4f}, mean={attn_weights.mean().item():.4f}")
+            print(f"DEBUG: Before final matmul (CPU) - v stats: min={v.min().item():.4f}, max={v.max().item():.4f}, mean={v.mean().item():.4f}")
             attn_output = torch.matmul(attn_weights, v)
-            print(f"DEBUG: After final matmul (CPU) - attn_output stats: min={attn_output.min():.4f}, max={attn_output.max():.4f}, mean={attn_output.mean():.4f}")
+            print(f"DEBUG: After final matmul (CPU) - attn_output stats: min={attn_output.min().item():.4f}, max={attn_output.max().item():.4f}, mean={attn_output.mean().item():.4f}")
             
             if torch.isnan(attn_output).any() or torch.isinf(attn_output).any():
                 print(f"ERROR: NaN/Inf detected in attn_output after final matmul (CPU)!")
@@ -284,11 +284,11 @@ class BitNetAttention(nn.Module):
             Attention output of shape (batch_size, seq_len, hidden_size)
         """
         batch_size, seq_length, hidden_size = hidden_states.shape
-        print(f"DEBUG: Attention input - hidden_states stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+        print(f"DEBUG: Attention input - hidden_states stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
         
         # Normalize before projections
         normed = self.norm(hidden_states) if hasattr(self, 'norm') else nn.LayerNorm(self.hidden_size).to(hidden_states.device)(hidden_states)
-        print(f"DEBUG: After norm - normed stats: min={normed.min():.4f}, max={normed.max():.4f}, mean={normed.mean():.4f}")
+        print(f"DEBUG: After norm - normed stats: min={normed.min().item():.4f}, max={normed.max().item():.4f}, mean={normed.mean().item():.4f}")
         
         if torch.isnan(normed).any() or torch.isinf(normed).any():
             print(f"ERROR: NaN/Inf detected in normed!")
@@ -301,7 +301,7 @@ class BitNetAttention(nn.Module):
         # Project queries, keys, values with normalized input
         print(f"DEBUG: Before projections")
         q = self.q_proj(normed)
-        print(f"DEBUG: After q_proj - q stats: min={q.min():.4f}, max={q.max():.4f}, mean={q.mean():.4f}")
+        print(f"DEBUG: After q_proj - q stats: min={q.min().item():.4f}, max={q.max().item():.4f}, mean={q.mean().item():.4f}")
         
         if torch.isnan(q).any() or torch.isinf(q).any():
             print(f"ERROR: NaN/Inf detected in q!")
@@ -309,7 +309,7 @@ class BitNetAttention(nn.Module):
             print(f"ERROR: Inf count: {torch.isinf(q).sum()}")
         
         k = self.k_proj(normed)
-        print(f"DEBUG: After k_proj - k stats: min={k.min():.4f}, max={k.max():.4f}, mean={k.mean():.4f}")
+        print(f"DEBUG: After k_proj - k stats: min={k.min().item():.4f}, max={k.max().item():.4f}, mean={k.mean().item():.4f}")
         
         if torch.isnan(k).any() or torch.isinf(k).any():
             print(f"ERROR: NaN/Inf detected in k!")
@@ -317,7 +317,7 @@ class BitNetAttention(nn.Module):
             print(f"ERROR: Inf count: {torch.isinf(k).sum()}")
         
         v = self.v_proj(normed)
-        print(f"DEBUG: After v_proj - v stats: min={v.min():.4f}, max={v.max():.4f}, mean={v.mean():.4f}")
+        print(f"DEBUG: After v_proj - v stats: min={v.min().item():.4f}, max={v.max().item():.4f}, mean={v.mean().item():.4f}")
         
         if torch.isnan(v).any() or torch.isinf(v).any():
             print(f"ERROR: NaN/Inf detected in v!")
@@ -343,9 +343,9 @@ class BitNetAttention(nn.Module):
         # The rotary embeddings expect input of shape (batch_size, num_heads, seq_len, head_dim)
         # Use cache_position for rotary embedding if provided, else use position_ids
         rotary_pos = cache_position if cache_position is not None else position_ids
-        print(f"DEBUG: Before RoPE - q stats: min={q.min():.4f}, max={q.max():.4f}, mean={q.mean():.4f}")
+        print(f"DEBUG: Before RoPE - q stats: min={q.min().item():.4f}, max={q.max().item():.4f}, mean={q.mean().item():.4f}")
         q = self.rotary_emb(q, seq_len=seq_length, position_ids=rotary_pos)
-        print(f"DEBUG: After RoPE q - q stats: min={q.min():.4f}, max={q.max():.4f}, mean={q.mean():.4f}")
+        print(f"DEBUG: After RoPE q - q stats: min={q.min().item():.4f}, max={q.max().item():.4f}, mean={q.mean().item():.4f}")
         
         if torch.isnan(q).any() or torch.isinf(q).any():
             print(f"ERROR: NaN/Inf detected in q after RoPE!")
@@ -353,7 +353,7 @@ class BitNetAttention(nn.Module):
             print(f"ERROR: Inf count: {torch.isinf(q).sum()}")
         
         k = self.rotary_emb(k, seq_len=seq_length, position_ids=rotary_pos)
-        print(f"DEBUG: After RoPE k - k stats: min={k.min():.4f}, max={k.max():.4f}, mean={k.mean():.4f}")
+        print(f"DEBUG: After RoPE k - k stats: min={k.min().item():.4f}, max={k.max().item():.4f}, mean={k.mean().item():.4f}")
         
         if torch.isnan(k).any() or torch.isinf(k).any():
             print(f"ERROR: NaN/Inf detected in k after RoPE!")
@@ -371,14 +371,14 @@ class BitNetAttention(nn.Module):
             v = torch.cat([past_v, v], dim=2)
         
         # Compute attention
-        print(f"DEBUG: Before attention computation - q stats: min={q.min():.4f}, max={q.max():.4f}, mean={q.mean():.4f}")
-        print(f"DEBUG: Before attention computation - k stats: min={k.min():.4f}, max={k.max():.4f}, mean={k.mean():.4f}")
-        print(f"DEBUG: Before attention computation - v stats: min={v.min():.4f}, max={v.max():.4f}, mean={v.mean():.4f}")
+        print(f"DEBUG: Before attention computation - q stats: min={q.min().item():.4f}, max={q.max().item():.4f}, mean={q.mean().item():.4f}")
+        print(f"DEBUG: Before attention computation - k stats: min={k.min().item():.4f}, max={k.max().item():.4f}, mean={k.mean().item():.4f}")
+        print(f"DEBUG: Before attention computation - v stats: min={v.min().item():.4f}, max={v.max().item():.4f}, mean={v.mean().item():.4f}")
         
         with torch.autograd.profiler.record_function("Attention.compute"):
             attn_output = self._compute_attention(q, k, v, attention_mask)
         
-        print(f"DEBUG: After attention computation - attn_output stats: min={attn_output.min():.4f}, max={attn_output.max():.4f}, mean={attn_output.mean():.4f}")
+        print(f"DEBUG: After attention computation - attn_output stats: min={attn_output.min().item():.4f}, max={attn_output.max().item():.4f}, mean={attn_output.mean().item():.4f}")
         
         if torch.isnan(attn_output).any() or torch.isinf(attn_output).any():
             print(f"ERROR: NaN/Inf detected in attn_output!")
