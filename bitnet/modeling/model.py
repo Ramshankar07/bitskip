@@ -371,8 +371,18 @@ class BitNetModel(nn.Module):
             
             # Get embeddings
             inputs_embeds = self.embed_tokens(input_ids)
+            print(f"DEBUG: After token embeddings - inputs_embeds stats: min={inputs_embeds.min():.4f}, max={inputs_embeds.max():.4f}, mean={inputs_embeds.mean():.4f}")
+            
             position_embeddings = self.embed_positions(position_ids)
+            print(f"DEBUG: After position embeddings - position_embeddings stats: min={position_embeddings.min():.4f}, max={position_embeddings.max():.4f}, mean={position_embeddings.mean():.4f}")
+            
             hidden_states = inputs_embeds + position_embeddings
+            print(f"DEBUG: After combining embeddings - hidden_states stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+            
+            if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
+                print(f"ERROR: NaN/Inf detected in hidden_states after embeddings!")
+                print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum()}")
+                print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum()}")
             
             # Initialize layer outputs
             all_hidden_states = []  # Always collect for early exit loss
@@ -380,6 +390,14 @@ class BitNetModel(nn.Module):
             
             # Process each layer
             for layer_idx in range(self.config.num_hidden_layers):
+                print(f"DEBUG: Before layer {layer_idx} - hidden_states stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+                
+                if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
+                    print(f"ERROR: NaN/Inf detected in hidden_states before layer {layer_idx}!")
+                    print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum()}")
+                    print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum()}")
+                    break
+                
                 # Get layer function
                 layer_fn = self._get_layer_fn(layer_idx)
                 
@@ -396,6 +414,14 @@ class BitNetModel(nn.Module):
                     exit_layer=exit_layer,
                     training_step=training_step
                 )
+                
+                print(f"DEBUG: After layer {layer_idx} - hidden_states stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+                
+                if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
+                    print(f"ERROR: NaN/Inf detected in hidden_states after layer {layer_idx}!")
+                    print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum()}")
+                    print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum()}")
+                    break  # Stop processing to prevent further NaN propagation
                 
                 # Store hidden states if requested
                 if output_hidden_states:
