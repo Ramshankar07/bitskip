@@ -209,18 +209,33 @@ class BitNetForCausalLM(nn.Module):
         self.apply(self._init_weights)
     
     def _init_weights(self, module):
-        """Initialize weights using standard initialization for stability."""
+        """Initialize weights using conservative initialization for BitNet stability."""
         if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
+            # Use smaller initialization range for BitNet
+            std = self.config.initializer_range
+            # Ensure initializer_range is small enough
+            if std > 0.02:
+                std = 0.02  # Cap at 0.02 for safety
+            
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
+                
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
-        elif isinstance(module, nn.LayerNorm):
+            # Conservative embedding initialization
+            std = min(self.config.initializer_range, 0.02)
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            
+        elif isinstance(module, (nn.LayerNorm, nn.modules.normalization.LayerNorm)):
             if hasattr(module, 'weight') and module.weight is not None:
                 torch.nn.init.ones_(module.weight)
             if hasattr(module, 'bias') and module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
+        
+        # Handle RMSNorm if your model uses it
+        elif module.__class__.__name__ == 'RMSNorm':
+            if hasattr(module, 'weight') and module.weight is not None:
+                torch.nn.init.ones_(module.weight)
     
     def forward(
         self,
