@@ -47,10 +47,14 @@ from bitnet.utils.default_config import DefaultConfig
 # Load environment variables
 load_dotenv()
 
-# Disable HuggingFace caching
-os.environ["HF_DATASETS_CACHE"] = ""
-os.environ["TRANSFORMERS_CACHE"] = ""
-os.environ["HF_HOME"] = ""
+# Disable HuggingFace caching by using temporary directory
+import tempfile
+temp_dir = tempfile.mkdtemp()
+os.environ["HF_DATASETS_CACHE"] = temp_dir
+os.environ["TRANSFORMERS_CACHE"] = temp_dir
+os.environ["HF_HOME"] = temp_dir
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 class BitNetConfig:
     """
@@ -412,7 +416,7 @@ def main():
     logger.info("=" * 80)
     logger.info("1B PARAMETER BITNET TRAINING - H200 GPU SCALING STUDY (HF COMPATIBLE)")
     logger.info("=" * 80)
-    logger.info("Features: HF Compatible + Layer Dropout + BitLinear + Early Exit + Quadratic Schedule + FP16")
+    logger.info("Features: HF Compatible + Layer Dropout + BitLinear + Quadratic Schedule + FP16")
     logger.info("Target: ~963M parameters (close to 1B)")
     logger.info("Memory: ~3.6GB FP16 (fits comfortably in H200's 141GB)")
     logger.info("=" * 80)
@@ -427,6 +431,8 @@ def main():
             os.getenv("TOKENIZER_NAME", "meta-llama/Meta-Llama-3-8B-Instruct"),
             token=os.getenv("HUGGINGFACE_TOKEN"),
             force_download=False,
+            cache_dir=temp_dir,
+            local_files_only=False,
         )
         tokenizer.pad_token = tokenizer.eos_token
         actual_vocab_size = len(tokenizer)
@@ -446,7 +452,7 @@ def main():
         use_layer_skipping=True,
         skip_probability=0.1,
         min_layers_to_keep=4,
-        use_early_exit=True , 
+        use_early_exit=False,  # Disabled for memory efficiency
         early_exit_threshold=args.early_exit_threshold,
         dropout_schedule='quadratic',
         quadratic_constant=args.quadratic_constant
@@ -658,7 +664,7 @@ def main():
     logger.info("=" * 80)
     logger.info("1B PARAMETER TRAINING COMPLETED SUCCESSFULLY!")
     logger.info("=" * 80)
-    logger.info("Features: HF Compatible + Layer Dropout + BitLinear + Early Exit + Quadratic Schedule + FP16")
+    logger.info("Features: HF Compatible + Layer Dropout + BitLinear + Quadratic Schedule + FP16")
     logger.info(f"Model Size: {total_params:,} parameters (~{total_params/1e9:.1f}B)")
     logger.info(f"Memory Usage: ~3.6GB FP16 (H200: 141GB)")
     logger.info(f"Quadratic Constant: {args.quadratic_constant}")

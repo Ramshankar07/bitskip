@@ -53,10 +53,14 @@ from bitnet.utils.default_config import DefaultConfig
 # Load environment variables
 load_dotenv()
 
-# Disable HuggingFace caching
-os.environ["HF_DATASETS_CACHE"] = ""
-os.environ["TRANSFORMERS_CACHE"] = ""
-os.environ["HF_HOME"] = ""
+# Disable HuggingFace caching by using temporary directory
+import tempfile
+temp_dir = tempfile.mkdtemp()
+os.environ["HF_DATASETS_CACHE"] = temp_dir
+os.environ["TRANSFORMERS_CACHE"] = temp_dir
+os.environ["HF_HOME"] = temp_dir
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 class BitNetConfig:
     """
@@ -417,7 +421,7 @@ def main():
     logger.info("=" * 80)
     logger.info("2B PARAMETER H-BITLINEAR BITNET TRAINING - H200 GPU SCALING STUDY (HF COMPATIBLE)")
     logger.info("=" * 80)
-    logger.info("Features: HF Compatible + H-BitLinear + Layer Dropout + BitLinear + Early Exit + Quadratic Schedule + FP16")
+    logger.info("Features: HF Compatible + H-BitLinear + Layer Dropout + BitLinear + Quadratic Schedule + FP16")
     logger.info("Target: ~2.1B parameters (increased from 1.94B)")
     logger.info("Memory: ~7.2GB FP16 (fits comfortably in H200's 141GB)")
     logger.info("=" * 80)
@@ -432,6 +436,8 @@ def main():
             os.getenv("TOKENIZER_NAME", "meta-llama/Meta-Llama-3-8B-Instruct"),
             token=os.getenv("HUGGINGFACE_TOKEN"),
             force_download=False,
+            cache_dir=temp_dir,
+            local_files_only=False,
         )
         tokenizer.pad_token = tokenizer.eos_token
         actual_vocab_size = len(tokenizer)
@@ -730,7 +736,7 @@ def main():
     logger.info("=" * 80)
     logger.info("2B PARAMETER H-BITLINEAR TRAINING COMPLETED SUCCESSFULLY!")
     logger.info("=" * 80)
-    logger.info("Features: HF Compatible + H-BitLinear + Layer Dropout + BitLinear + Early Exit + Quadratic Schedule + FP16")
+    logger.info("Features: HF Compatible + H-BitLinear + Layer Dropout + BitLinear + Quadratic Schedule + FP16")
     logger.info(f"Model Size: {total_params:,} parameters (~{total_params/1e9:.1f}B)")
     logger.info(f"Memory Usage: ~7.2GB FP16 (H200: 141GB)")
     logger.info(f"Activation Bits: {config.activation_bits}")
