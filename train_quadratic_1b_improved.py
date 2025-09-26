@@ -542,7 +542,8 @@ def main():
         batch_size=args.batch_size,
         max_length=args.max_length,
         streaming=True,
-        text_column="text"
+        text_column="text",
+        cache_dir=None
     )
     
     
