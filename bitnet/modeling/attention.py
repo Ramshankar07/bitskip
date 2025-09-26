@@ -178,6 +178,16 @@ class BitNetAttention(nn.Module):
             # q shape: (batch_size, num_heads, seq_len_q, head_dim)
             # k shape: (batch_size, num_heads, seq_len_k, head_dim)
             # attn_scores shape: (batch_size, num_heads, seq_len_q, seq_len_k)
+            
+            # Check for extreme values before matmul
+            print(f"DEBUG: Q max abs: {q.abs().max():.4f}, K max abs: {k.abs().max():.4f}")
+            print(f"DEBUG: Q std: {q.std():.4f}, K std: {k.std():.4f}")
+            print(f"DEBUG: head_dim: {self.head_dim}, scale: {self.scale:.6f}")
+            
+            # Check if values are too large
+            if q.abs().max() > 1000 or k.abs().max() > 1000:
+                print(f"WARNING: Very large Q/K values detected! Q max: {q.abs().max():.4f}, K max: {k.abs().max():.4f}")
+            
             attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
             print(f"DEBUG: After matmul - attn_scores stats: min={attn_scores.min():.4f}, max={attn_scores.max():.4f}, mean={attn_scores.mean():.4f}")
             

@@ -160,6 +160,15 @@ class BitLinear(nn.Module):
             w_original = self.weight.data.clone()
             self.weight.data = w_q * w_scale
             
+            # Debug scaling factors
+            print(f"DEBUG: BitLinear - w_scale: {w_scale:.6f}, x_scale: {x_scale:.6f}, ratio: {w_scale/x_scale:.6f}")
+            print(f"DEBUG: BitLinear - x_q stats: min={x_q.min():.4f}, max={x_q.max():.4f}, mean={x_q.mean():.4f}")
+            print(f"DEBUG: BitLinear - weight stats: min={self.weight.min():.4f}, max={self.weight.max():.4f}, mean={self.weight.mean():.4f}")
+            
+            # Check for extreme scaling
+            if w_scale / x_scale > 1000:
+                print(f"WARNING: Extreme scaling ratio detected! w_scale/x_scale = {w_scale/x_scale:.2f}")
+            
             # Compute quantization loss if requested
             if return_quantization_info:
                 quant_loss = self.compute_quantization_loss(w_original, w_q * w_scale)
@@ -173,6 +182,13 @@ class BitLinear(nn.Module):
                 output = bitlinear_forward_cuda(x_q, self.weight, self.bias) / x_scale
             else:
                 output = F.linear(x_q, self.weight, self.bias) / x_scale
+            
+            print(f"DEBUG: BitLinear - output before squared_relu: min={output.min():.4f}, max={output.max():.4f}, mean={output.mean():.4f}")
+            
+            if torch.isnan(output).any() or torch.isinf(output).any():
+                print(f"ERROR: NaN/Inf detected in BitLinear output before squared_relu!")
+                print(f"ERROR: NaN count: {torch.isnan(output).sum()}")
+                print(f"ERROR: Inf count: {torch.isinf(output).sum()}")
             
             self.weight.data = w_original
         else:
