@@ -51,24 +51,43 @@ def compute_early_exit_loss_per_layer(
 ) -> Optional[torch.Tensor]:
     """Compute early exit loss for samples that didn't skip this layer."""
     
+    print(f"DEBUG: compute_early_exit_loss_per_layer - layer {layer_idx}")
+    print(f"DEBUG: curriculum_mask[{layer_idx}]: {curriculum_mask[layer_idx]}")
+    
     if not curriculum_mask[layer_idx]:
+        print(f"DEBUG: Layer {layer_idx} not in curriculum, returning None")
         return None
         
     # Only compute loss for non-skipped samples
     active_mask = ~skip_mask
+    print(f"DEBUG: skip_mask: {skip_mask}, active_mask: {active_mask}")
     if not active_mask.any():
+        print(f"DEBUG: No active samples for layer {layer_idx}, returning None")
         return None
         
     # Get logits for active samples
     active_states = hidden_states[active_mask]
     active_targets = target_ids[active_mask]
+    print(f"DEBUG: active_states shape: {active_states.shape}, active_targets shape: {active_targets.shape}")
     
     logits = lm_head(active_states)
+    print(f"DEBUG: Early exit logits shape: {logits.shape}, stats: min={logits.min():.4f}, max={logits.max():.4f}, mean={logits.mean():.4f}")
+    
+    if torch.isnan(logits).any() or torch.isinf(logits).any():
+        print(f"ERROR: NaN/Inf detected in early exit logits for layer {layer_idx}!")
+        return None
+    
     loss = F.cross_entropy(
         logits.view(-1, logits.size(-1)),
         active_targets.view(-1),
         reduction='mean'
     )
+    
+    print(f"DEBUG: Early exit loss for layer {layer_idx}: {loss:.4f}")
+    
+    if torch.isnan(loss) or torch.isinf(loss):
+        print(f"ERROR: NaN/Inf detected in early exit loss for layer {layer_idx}!")
+        return None
     
     return loss
 
@@ -93,18 +112,48 @@ def compute_early_exit_loss(
     Returns:
         Scaled early exit loss
     """
+    print(f"DEBUG: compute_early_exit_loss - {len(hidden_states_list)} layers, iteration={iteration}")
+    
     L = len(hidden_states_list)
     # Cumulative quadratic weights
     weights = [sum(k+1 for k in range(l+1)) for l in range(L)]
     weight_sum = sum(weights)
     normalized_weights = [w/weight_sum for w in weights]
+    print(f"DEBUG: Weights: {weights}, normalized: {[f'{w:.4f}' for w in normalized_weights]}")
+    
     total_loss = 0.0
     for l, hidden_states in enumerate(hidden_states_list):
+        print(f"DEBUG: Processing layer {l}, curriculum_fn result: {curriculum_fn(l, iteration)}")
         if curriculum_fn(l, iteration):
+            print(f"DEBUG: Computing loss for layer {l}")
+            print(f"DEBUG: hidden_states shape: {hidden_states.shape}, targets shape: {targets.shape}")
+            
             logits = lm_head(hidden_states)
+            print(f"DEBUG: Early exit logits shape: {logits.shape}, stats: min={logits.min():.4f}, max={logits.max():.4f}, mean={logits.mean():.4f}")
+            
+            if torch.isnan(logits).any() or torch.isinf(logits).any():
+                print(f"ERROR: NaN/Inf detected in early exit logits for layer {l}!")
+                continue
+            
             layer_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
-            total_loss += normalized_weights[l] * layer_loss
-    return total_loss * escale
+            print(f"DEBUG: Layer {l} loss: {layer_loss:.4f}, weight: {normalized_weights[l]:.4f}")
+            
+            if torch.isnan(layer_loss) or torch.isinf(layer_loss):
+                print(f"ERROR: NaN/Inf detected in early exit loss for layer {l}!")
+                continue
+            
+            weighted_loss = normalized_weights[l] * layer_loss
+            print(f"DEBUG: Layer {l} weighted loss: {weighted_loss:.4f}")
+            total_loss += weighted_loss
+    
+    final_loss = total_loss * escale
+    print(f"DEBUG: Final early exit loss: {final_loss:.4f} (total={total_loss:.4f}, escale={escale})")
+    
+    if torch.isnan(final_loss) or torch.isinf(final_loss):
+        print(f"ERROR: NaN/Inf detected in final early exit loss!")
+        return torch.tensor(0.0, device=targets.device, requires_grad=True)
+    
+    return final_loss
 
 
 class BitNetModel(nn.Module):
@@ -354,6 +403,11 @@ class BitNetModel(nn.Module):
                 
                 # Compute early exit loss if not skipped and early exit is enabled
                 if self.training and self.config.use_early_exit:
+                    print(f"DEBUG: Computing early exit loss for layer {layer_idx}")
+                    print(f"DEBUG: hidden_states shape: {hidden_states.shape}, stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+                    print(f"DEBUG: skip_mask: {skip_mask}")
+                    print(f"DEBUG: curriculum_mask[{layer_idx}]: {self.early_exit_curriculum[layer_idx]}")
+                    
                     with torch.autograd.profiler.record_function("EarlyExitLoss"):
                         layer_loss = compute_early_exit_loss_per_layer(
                             hidden_states=hidden_states,
@@ -364,7 +418,13 @@ class BitNetModel(nn.Module):
                             curriculum_mask=self.early_exit_curriculum
                         )
                         if layer_loss is not None:
+                            print(f"DEBUG: Layer {layer_idx} early exit loss: {layer_loss:.4f}")
                             early_exit_losses.append((layer_idx, layer_loss))
+                        else:
+                            print(f"DEBUG: Layer {layer_idx} early exit loss is None")
+                else:
+                    if self.training:
+                        print(f"DEBUG: Skipping early exit for layer {layer_idx} - use_early_exit={self.config.use_early_exit}")
                 
                 # Early exit if requested
                 if exit_layer is not None and layer_idx >= exit_layer:
@@ -374,19 +434,36 @@ class BitNetModel(nn.Module):
             hidden_states = self.layer_norm(hidden_states)
             
             # Compute logits
+            print(f"DEBUG: Computing logits from hidden_states shape: {hidden_states.shape}")
+            print(f"DEBUG: hidden_states stats: min={hidden_states.min():.4f}, max={hidden_states.max():.4f}, mean={hidden_states.mean():.4f}")
+            
             logits = self.lm_head(hidden_states)
+            print(f"DEBUG: Logits shape: {logits.shape}, stats: min={logits.min():.4f}, max={logits.max():.4f}, mean={logits.mean():.4f}")
+            
+            if torch.isnan(logits).any() or torch.isinf(logits).any():
+                print(f"ERROR: NaN/Inf detected in logits!")
+                print(f"ERROR: Logits NaN count: {torch.isnan(logits).sum()}")
+                print(f"ERROR: Logits Inf count: {torch.isinf(logits).sum()}")
             
             # Compute loss if labels are provided
             loss = None
             if labels is not None:
+                print(f"DEBUG: Computing loss with labels shape: {labels.shape}")
                 # Shift so that tokens < n predict n
                 shift_logits = logits[..., :-1, :].contiguous()
                 shift_labels = labels[..., 1:].contiguous()
+                print(f"DEBUG: Shift logits shape: {shift_logits.shape}, shift labels shape: {shift_labels.shape}")
+                
                 loss_fct = nn.CrossEntropyLoss()
                 loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+                print(f"DEBUG: Main loss: {loss:.4f}")
+                
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"ERROR: NaN/Inf detected in main loss!")
                 
                 # Add early exit losses if any and early exit is enabled
                 if self.training and early_exit_losses and self.config.use_early_exit:
+                    print(f"DEBUG: Adding early exit losses, count: {len(early_exit_losses)}")
                     early_exit_loss = compute_early_exit_loss(
                         all_hidden_states, # Pass all hidden states for loss computation
                         labels,
@@ -395,7 +472,12 @@ class BitNetModel(nn.Module):
                         lambda l, _: self.early_exit_curriculum[l], # Pass curriculum_fn
                         self.config.early_exit_threshold
                     )
+                    print(f"DEBUG: Early exit loss: {early_exit_loss:.4f}")
                     loss = loss + early_exit_loss
+                    print(f"DEBUG: Combined loss: {loss:.4f}")
+                else:
+                    if self.training:
+                        print(f"DEBUG: Not adding early exit losses - early_exit_losses={len(early_exit_losses) if early_exit_losses else 0}, use_early_exit={self.config.use_early_exit}")
             
             if not return_dict:
                 return tuple(v for v in [logits, all_hidden_states, loss] if v is not None)
@@ -417,9 +499,7 @@ class BitNetModel(nn.Module):
                 past_key_values=None  # We don't use KV cache in this implementation
             )
             
-            # Add quantization info as an attribute if requested
-            if return_quantization_info and quantization_info is not None:
-                output.quantization_info = quantization_info
+            # Add quantization info as an attribute if requested\
             
             return output
     

@@ -275,6 +275,8 @@ class BitNetForCausalLM(nn.Module):
             internal_use_early_exit = getattr(self.model.config, 'use_early_exit', 'Not found')
             if hasattr(self, '_debug_step') and self._debug_step < 3:  # Only log first few steps
                 print(f"Debug step {self._debug_step}: Internal use_early_exit = {internal_use_early_exit}")
+                print(f"Debug step {self._debug_step}: Input shapes - input_ids={input_ids.shape}, attention_mask={attention_mask.shape if attention_mask is not None else None}")
+                print(f"Debug step {self._debug_step}: Labels shape = {labels.shape if labels is not None else None}")
                 self._debug_step = getattr(self, '_debug_step', 0) + 1
         
         outputs = self.model(**model_inputs_no_loss)
@@ -290,12 +292,23 @@ class BitNetForCausalLM(nn.Module):
         # Compute loss if labels are provided (do it ourselves to avoid internal model issues)
         loss = None
         if labels is not None:
+            print(f"DEBUG: Computing loss in wrapper - logits shape: {logits.shape}, labels shape: {labels.shape}")
+            print(f"DEBUG: Logits stats: min={logits.min():.4f}, max={logits.max():.4f}, mean={logits.mean():.4f}")
+            
+            if torch.isnan(logits).any() or torch.isinf(logits).any():
+                print(f"ERROR: NaN/Inf detected in wrapper logits!")
+                print(f"ERROR: Logits NaN count: {torch.isnan(logits).sum()}")
+                print(f"ERROR: Logits Inf count: {torch.isinf(logits).sum()}")
+            
             # Shift so that tokens < n predict n
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             
+            print(f"DEBUG: Shift logits shape: {shift_logits.shape}, shift labels shape: {shift_labels.shape}")
+            
             # Check for empty sequences that would cause NaN
             if shift_logits.size(1) == 0:
+                print("Warning: Empty sequence after shifting, using dummy loss")
                 # Handle empty sequence case
                 loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
             else:
@@ -307,6 +320,10 @@ class BitNetForCausalLM(nn.Module):
                 # Enable model parallelism
                 shift_labels = shift_labels.to(shift_logits.device)
                 loss = loss_fct(shift_logits, shift_labels)
+                print(f"DEBUG: Wrapper loss: {loss:.4f}")
+                
+                if torch.isnan(loss) or torch.isinf(loss):
+                    print(f"ERROR: NaN/Inf detected in wrapper loss!")
         
         if not return_dict:
             output = (logits,)
