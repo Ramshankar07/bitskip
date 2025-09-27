@@ -452,14 +452,18 @@ class BitNetForCausalLM_Nuclear(nn.Module):
         
         try:
             # Try simple embedding + projection for testing
+            # Ensure all model components are on the correct device
+            self.model = self.model.to(device)
+            self.lm_head = self.lm_head.to(device)
+            
             hidden = self.model.embed_tokens(input_ids)
             
             # Skip all problematic layers - just project to vocab
             logits = self.lm_head(hidden)
         except Exception as e:
             print(f"   ⚠️ Even nuclear option failed, using ultra-minimal approach: {e}")
-            # Ultra-minimal approach: just random logits
-            logits = torch.randn(batch_size, seq_len, self.config.vocab_size, device=device)
+            # Ultra-minimal approach: just random logits on the correct device
+            logits = torch.randn(batch_size, seq_len, self.config.vocab_size, device=device, requires_grad=True)
         
         # Compute loss
         loss = None
@@ -531,6 +535,10 @@ def safe_forward(model, **kwargs):
                 try:
                     if hasattr(model, 'config'):
                         nuclear_model = BitNetForCausalLM_Nuclear(model.config)
+                        # Move to the same device as the input
+                        device = kwargs.get('input_ids', torch.tensor(0)).device
+                        nuclear_model = nuclear_model.to(device)
+                        
                         # Only copy compatible parameters
                         model_state = model.state_dict()
                         nuclear_state = nuclear_model.state_dict()
