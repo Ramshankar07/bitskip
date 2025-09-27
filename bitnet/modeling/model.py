@@ -80,7 +80,7 @@ def compute_early_exit_loss_per_layer(
         reduction='mean'
     )
     
-    if torch.isnan(loss) or torch.isinf(loss):
+    if torch.isnan(loss).any() or torch.isinf(loss).any():
         print(f"ERROR: NaN/Inf detected in early exit loss for layer {layer_idx}!")
         return None
     
@@ -125,7 +125,7 @@ def compute_early_exit_loss(
             
             layer_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
             
-            if torch.isnan(layer_loss) or torch.isinf(layer_loss):
+            if torch.isnan(layer_loss).any() or torch.isinf(layer_loss).any():
                 print(f"ERROR: NaN/Inf detected in early exit loss for layer {l}!")
                 continue
             
@@ -134,7 +134,7 @@ def compute_early_exit_loss(
     
     final_loss = total_loss * escale
     
-    if torch.isnan(final_loss) or torch.isinf(final_loss):
+    if torch.isnan(final_loss).any() or torch.isinf(final_loss).any():
         print(f"ERROR: NaN/Inf detected in final early exit loss!")
         return torch.tensor(0.0, device=targets.device, requires_grad=True)
     
@@ -457,7 +457,7 @@ class BitNetModel(nn.Module):
                 loss_fct = nn.CrossEntropyLoss()
                 loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
                 
-                if torch.isnan(loss) or torch.isinf(loss):
+                if torch.isnan(loss).any() or torch.isinf(loss).any():
                     print(f"ERROR: NaN/Inf detected in main loss!")
                 
                 # Add early exit losses if any and early exit is enabled

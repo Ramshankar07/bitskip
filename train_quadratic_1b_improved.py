@@ -311,7 +311,7 @@ class BitNetForCausalLM(nn.Module):
                 shift_labels = shift_labels.to(shift_logits.device)
                 loss = loss_fct(shift_logits, shift_labels)
                 
-                if torch.isnan(loss) or torch.isinf(loss):
+                if torch.isnan(loss).any() or torch.isinf(loss).any():
                     print(f"ERROR: NaN/Inf detected in wrapper loss!")
         
         if not return_dict:
@@ -644,7 +644,7 @@ def main():
                 loss = outputs.loss
             
             # Check for NaN loss
-            if torch.isnan(loss) or torch.isinf(loss):
+            if torch.isnan(loss).any() or torch.isinf(loss).any():
                 logger.warning(f"NaN/Inf loss detected at step {global_step}, skipping step")
                 optimizer.zero_grad()
                 continue
