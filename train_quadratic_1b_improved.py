@@ -263,29 +263,45 @@ class BitNetForCausalLM(nn.Module):
         Returns:
             CausalLMOutput or tuple of outputs
         """
-        # Prepare inputs for internal model
-        model_inputs = {
-            'input_ids': input_ids,
-            'attention_mask': attention_mask,
-            'labels': labels,
-            'output_hidden_states': output_hidden_states,
-            'training_step': 0  # Add training step to prevent early exit issues
-        }
+        # Get embeddings directly (bypass internal model to avoid boolean tensor errors)
+        batch_size, seq_length = input_ids.shape
         
-        # Forward pass through internal model (labels excluded to avoid boolean tensor errors)
-        outputs = self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_hidden_states=output_hidden_states
-        )
+        # Generate position IDs
+        position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
+        position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
         
-        # Get logits from the internal model's LM head
-        if hasattr(outputs, 'logits'):
-            logits = outputs.logits
-        else:
-            # Fallback: compute logits from last hidden state using internal model's LM head
-            hidden_states = outputs.last_hidden_state if hasattr(outputs, 'last_hidden_state') else outputs[0]
-            logits = self.model.lm_head(hidden_states)
+        # Get embeddings
+        inputs_embeds = self.model.embed_tokens(input_ids)
+        position_embeddings = self.model.embed_positions(position_ids)
+        hidden_states = inputs_embeds + position_embeddings
+        
+        # Process through transformer layers manually
+        all_hidden_states = [] if output_hidden_states else None
+        for layer_idx, layer in enumerate(self.model.layers):
+            layer_outputs = layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids
+            )
+            if isinstance(layer_outputs, tuple):
+                hidden_states = layer_outputs[0]
+            else:
+                hidden_states = layer_outputs
+            
+            # Store hidden states if requested
+            if output_hidden_states:
+                all_hidden_states.append(hidden_states)
+            
+            # Check for NaN
+            if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
+                print(f"NaN detected after layer {layer_idx}")
+                break
+        
+        # Apply final layer norm
+        hidden_states = self.model.layer_norm(hidden_states)
+        
+        # Get logits
+        logits = self.model.lm_head(hidden_states)
         
         # Compute loss if labels are provided (do it ourselves to avoid internal model issues)
         loss = None
@@ -318,13 +334,13 @@ class BitNetForCausalLM(nn.Module):
         if not return_dict:
             output = (logits,)
             if output_hidden_states:
-                output += (outputs.hidden_states,)
+                output += (all_hidden_states,)
             return ((loss,) + output) if loss is not None else output
         
         return CausalLMOutput(
             loss=loss,
             logits=logits,
-            hidden_states=outputs.hidden_states if output_hidden_states else None,
+            hidden_states=all_hidden_states,
             attentions=None
         )
     
