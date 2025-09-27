@@ -390,20 +390,28 @@ class BitNetModel(nn.Module):
             print(f"DEBUG: NaN/Inf check passed")
             
             # Initialize layer outputs
+            print(f"DEBUG: Initializing layer outputs")
             all_hidden_states = []  # Always collect for early exit loss
             early_exit_losses = []
+            print(f"DEBUG: Layer outputs initialized")
             
             # Process each layer
+            print(f"DEBUG: Starting layer processing loop")
             for layer_idx in range(self.config.num_hidden_layers):
+                print(f"DEBUG: Processing layer {layer_idx}")
                 if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                     print(f"ERROR: NaN/Inf detected in hidden_states before layer {layer_idx}!")
                     break
                 
                 # Get layer function
+                print(f"DEBUG: Getting layer function for layer {layer_idx}")
                 layer_fn = self._get_layer_fn(layer_idx)
+                print(f"DEBUG: Layer function obtained for layer {layer_idx}")
                 
                 # Apply layer skipping only if enabled
+                print(f"DEBUG: Checking layer skipping for layer {layer_idx}")
                 if self.config.use_layer_skipping:
+                    print(f"DEBUG: Layer skipping enabled, applying to layer {layer_idx}")
                     hidden_states, skip_mask = self.layer_skipping(
                         hidden_states=hidden_states,
                         layer_idx=layer_idx,
