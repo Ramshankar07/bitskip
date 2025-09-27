@@ -3,7 +3,7 @@ Core model components for BitNet LayerSkip.
 """
 
 from .bitlinear import BitLinear
-from .attention import BitNetAttention
+from .attention2 import BitNetAttention
 from .feed_forward import BitFeedForward
 from .layer_skipping import LayerSkipping
 from .transformer import BitTransformerBlock

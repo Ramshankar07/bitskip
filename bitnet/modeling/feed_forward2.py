@@ -9,7 +9,6 @@ import logging
 from typing import Dict
 
 from .h_bitlinear import HBitLinear
-from .kernels import bitnet_kernels, squared_relu_cuda
 
 logger = logging.getLogger(__name__)
 
@@ -55,30 +54,7 @@ class BitFeedForward2(nn.Module):
         # Dropout
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
     
-    def collect_quantization_losses(self) -> Dict[str, torch.Tensor]:
-        """
-        Collect quantization losses from H-BitLinear layers.
-        
-        Returns:
-            Dictionary containing quantization loss information
-        """
-        quantization_info = {}
-        
-        # Collect from up projection
-        if hasattr(self.up_proj, 'compute_quantization_loss'):
-            original_weights = self.up_proj.weight
-            w_q, w_scale = self.up_proj._weight_quantize(original_weights)
-            quant_loss = self.up_proj.compute_quantization_loss(original_weights, w_q * w_scale)
-            quantization_info['up_proj_quantization_loss'] = quant_loss
-        
-        # Collect from down projection
-        if hasattr(self.down_proj, 'compute_quantization_loss'):
-            original_weights = self.down_proj.weight
-            w_q, w_scale = self.down_proj._weight_quantize(original_weights)
-            quant_loss = self.down_proj.compute_quantization_loss(original_weights, w_q * w_scale)
-            quantization_info['down_proj_quantization_loss'] = quant_loss
-        
-        return quantization_info
+    
     
     def forward(self, hidden_states: torch.Tensor, return_quantization_info: bool = False) -> torch.Tensor:
         """
@@ -96,39 +72,23 @@ class BitFeedForward2(nn.Module):
         batch_size, seq_len, hidden_size = input_shape
         
         # Up projection with H-BitLinear
-        if return_quantization_info:
-            hidden_states, up_proj_quant_info = self.up_proj(hidden_states, bits=self.activation_bits, return_quantization_info=True)
-        else:
-            hidden_states = self.up_proj(hidden_states, bits=self.activation_bits)
+        hidden_states = self.up_proj(hidden_states, bits=self.activation_bits)
         # Assert up_proj output shape
         assert hidden_states.shape == (batch_size, seq_len, self.intermediate_size), f"Up projection output shape mismatch: {hidden_states.shape}"
         
         # Activation function (Squared ReLU)
-        if bitnet_kernels.is_available:
-            hidden_states = squared_relu_cuda(hidden_states)
-        else:
-            hidden_states = torch.relu(hidden_states) ** 2
+        hidden_states = torch.relu(hidden_states) ** 2
         
         # Dropout
         hidden_states = self.dropout(hidden_states)
         
         # Down projection with H-BitLinear
-        if return_quantization_info:
-            hidden_states, down_proj_quant_info = self.down_proj(hidden_states, bits=self.activation_bits, return_quantization_info=True)
-        else:
-            hidden_states = self.down_proj(hidden_states, bits=self.activation_bits)
+        hidden_states = self.down_proj(hidden_states, bits=self.activation_bits)
         
         # Verify output shape matches input shape
         assert hidden_states.shape == input_shape, \
             f"Feed-forward output shape {hidden_states.shape} doesn't match input shape {input_shape}"
         
-        if return_quantization_info:
-            # Combine quantization info from both layers
-            quantization_info = {}
-            if 'up_proj_quant_info' in locals():
-                quantization_info.update(up_proj_quant_info)
-            if 'down_proj_quant_info' in locals():
-                quantization_info.update(down_proj_quant_info)
-            return hidden_states, quantization_info
+        
         
         return hidden_states 

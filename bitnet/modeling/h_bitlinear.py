@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .kernels import fwht, ternary_quantize, activation_quantize
 
 
 def hadamard_transform(x: torch.Tensor) -> torch.Tensor:
@@ -98,8 +97,7 @@ class HBitLinear(nn.Module):
         Returns:
             Tuple of (quantized weights, scale factor)
         """
-        # Use the ternary_quantize function which has built-in CUDA/CPU fallback
-        return ternary_quantize(w)
+        
         
         # Calculate the scaling factor (mean of absolute values)
         scale = w.abs().mean()
@@ -111,27 +109,7 @@ class HBitLinear(nn.Module):
         w_quantized[w < -0.5 * scale] = -1.0
         return w_quantized, scale
 
-    def _activation_quantize(self, x: torch.Tensor, bits: int = 4) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Quantize activations to specified bit width.
-        
-        Args:
-            x: Activation tensor to quantize
-            bits: Number of bits for quantization (default: 4 for H-BitLinear)
-            
-        Returns:
-            Tuple of (quantized activations, scale factor)
-        """
-        # Use the activation_quantize function which has built-in CUDA/CPU fallback
-        return activation_quantize(x, bits)
-        
-        # Calculate scaling factor (max of absolute values per token)
-        scale = x.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-5)
-        # Scale to target bit range
-        max_val = (1 << (bits - 1)) - 1
-        x_scaled = (x * (max_val / scale)).round().clamp(-max_val, max_val)
-        # Return quantized values and scale for dequantization
-        return x_scaled, scale
+    
 
 
     def forward(self, x: torch.Tensor, bits: int = 4, ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
@@ -199,12 +177,7 @@ class HBitLinear(nn.Module):
             # During inference, use quantized weights directly
             w_q, w_scale = self._weight_quantize(self.weight)
             
-            # Compute quantization loss if requested (for evaluation)
-            if return_quantization_info:
-                quant_loss = self.compute_quantization_loss(self.weight, w_q * w_scale)
-                quantization_info['weight_quantization_loss'] = quant_loss
-                quantization_info['original_weights'] = self.weight
-                quantization_info['quantized_weights'] = w_q * w_scale
+            
             
             # Matrix multiplication with quantized values
             # Reshape for linear layer: (batch_size * seq_length, in_features) -> (batch_size * seq_length, out_features)
@@ -226,7 +199,4 @@ class HBitLinear(nn.Module):
         # Apply inverse Hadamard transform to output
         output = hadamard_transform(output)
         
-        if return_quantization_info:
-            return output, quantization_info
-        else:
-            return output
+        return output

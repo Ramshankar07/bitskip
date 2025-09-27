@@ -9,9 +9,8 @@ import torch.nn as nn
 from transformers.modeling_outputs import BaseModelOutput
 
 from ..utils.default_config import DefaultConfig
-from .attention2 import BitNetAttention2
+from .gqa_attention2 import BitNetGQA2
 from .feed_forward2 import BitFeedForward2
-from .layer_skipping import LayerSkipping
 from .subln import SublayerNormWithResidual
 
 
@@ -28,12 +27,14 @@ class BitTransformerBlock2(nn.Module):
         self.config = config
         self.activation_bits = config.activation_bits  # Get from config
         
-        # Self-attention with SublayerNorm
-        self.self_attn = BitNetAttention2(
+        # Self-attention with SublayerNorm using GQA
+        self.self_attn = BitNetGQA2(
             hidden_size=config.hidden_size,
             num_heads=config.num_attention_heads,
+            num_kv_heads=config.num_key_value_heads,
             dropout=config.attention_probs_dropout_prob,
-            activation_bits=self.activation_bits  # Pass activation bits
+            activation_bits=self.activation_bits,
+            weight_bits=config.weight_bits
         )
         self.self_attn_norm = SublayerNormWithResidual(
             hidden_size=config.hidden_size,
@@ -50,28 +51,7 @@ class BitTransformerBlock2(nn.Module):
         # Dropout
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
     
-    def collect_quantization_losses(self) -> Dict[str, torch.Tensor]:
-        """
-        Collect quantization losses from attention and feed-forward components.
-        
-        Returns:
-            Dictionary containing quantization loss information
-        """
-        quantization_info = {}
-        
-        # Collect from self-attention
-        attn_quant_info = self.self_attn.collect_quantization_losses()
-        if attn_quant_info:
-            for key, value in attn_quant_info.items():
-                quantization_info[f"attention_{key}"] = value
-        
-        # Collect from feed-forward
-        ff_quant_info = self.feed_forward.collect_quantization_losses()
-        if ff_quant_info:
-            for key, value in ff_quant_info.items():
-                quantization_info[f"feedforward_{key}"] = value
-        
-        return quantization_info
+    
     
     def forward(
         self,
@@ -105,18 +85,26 @@ class BitTransformerBlock2(nn.Module):
             attn_outputs = self.self_attn(
                 hidden_states,
                 attention_mask=attention_mask,
-                layer_past=layer_past,
+                past_key_value=layer_past,
                 use_cache=use_cache,
                 position_ids=position_ids,
-                cache_position=cache_position
+                cache_position=cache_position,
             )
             
-            # Handle both cases: with and without cached key-values
+            # Handle attention outputs (could be 2 or 3 elements depending on quantization_info)
             if isinstance(attn_outputs, tuple):
-                # When use_cache=True, attention returns (output, cached_keys_values)
-                attn_output, present_key_value = attn_outputs
+                if len(attn_outputs) == 2:
+                    # When use_cache=True, attention returns (output, cached_keys_values)
+                    attn_output, present_key_value = attn_outputs
+                elif len(attn_outputs) == 3:
+                    # When use_cache=True and return_quantization_info=True
+                    attn_output, present_key_value, attn_quant_info = attn_outputs
+                else:
+                    # When use_cache=False and return_quantization_info=True
+                    attn_output, attn_quant_info = attn_outputs
+                    present_key_value = None
             else:
-                # When use_cache=False, attention returns just the output
+                # When use_cache=False and return_quantization_info=False
                 attn_output = attn_outputs
                 present_key_value = None
             
@@ -130,10 +118,7 @@ class BitTransformerBlock2(nn.Module):
             residual = hidden_states
             
             # Feed forward
-            if return_quantization_info:
-                ff_output, ff_quant_info = self.feed_forward(hidden_states, return_quantization_info=True)
-            else:
-                ff_output = self.feed_forward(hidden_states)
+            ff_output = self.feed_forward(hidden_states)
             
             # Apply dropout to feed-forward output
             ff_output = self.dropout(ff_output)
