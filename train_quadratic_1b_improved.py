@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 BitNet 1B Parameter Training Script - Built from working minimal version
-This version uses simplified transformer layers to avoid boolean tensor issues
+Uses Llama 3 tokenizer and FineWeb-Edu streaming dataset
 """
 
 import os
+import sys
 import argparse
 import logging
 import json
@@ -180,14 +181,14 @@ class BitNetConfig:
 
 
 def create_data_loader(tokenizer, batch_size, max_length, num_steps):
-    """
-    Create a simple data loader with random or sample data.
-    For production, replace with actual dataset loading.
-    """
+    """Create streaming data loader with FineWeb-Edu dataset."""
     from bitnet.data.streaming_loader import create_streaming_dataloader
     
     try:
-        # Try to load actual dataset
+        # Use the streaming loader with FineWeb-Edu dataset
+        logger = logging.getLogger(__name__)
+        logger.info("Loading FineWeb-Edu dataset with streaming...")
+        
         dataloader = create_streaming_dataloader(
             dataset_name="HuggingFaceFW/fineweb-edu",
             subset="sample-10BT",
@@ -195,41 +196,66 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
             batch_size=batch_size,
             max_length=max_length,
             streaming=True,
-            text_column="text"
+            text_column="text",
+            num_workers=0,  # Avoid multiprocessing issues
+            shuffle_buffer_size=10000
         )
+        
+        logger.info("Successfully created streaming dataloader")
         return dataloader, False
+        
     except Exception as e:
-        logging.warning(f"Could not load dataset: {e}")
-        logging.warning("Using random data for testing")
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Could not load FineWeb-Edu dataset: {e}")
+        logger.info("Trying alternative dataset...")
         
-        # Create random data for testing
-        class RandomDataLoader:
-            def __init__(self, vocab_size, batch_size, max_length, num_steps):
-                self.vocab_size = vocab_size
-                self.batch_size = batch_size
-                self.max_length = max_length
-                self.num_steps = num_steps
-                self.step = 0
+        try:
+            # Try alternative dataset
+            dataloader = create_streaming_dataloader(
+                dataset_name="allenai/dolmino-mix-1124",
+                subset="default",
+                tokenizer=tokenizer,
+                batch_size=batch_size,
+                max_length=max_length,
+                streaming=True,
+                text_column="text",
+                num_workers=0
+            )
+            logger.info("Successfully loaded alternative dataset")
+            return dataloader, False
             
-            def __iter__(self):
-                return self
+        except Exception as e2:
+            logger.warning(f"Could not load alternative dataset: {e2}")
+            logger.warning("Using random data for testing")
             
-            def __next__(self):
-                if self.step >= self.num_steps:
+            # Create random data for testing
+            class RandomDataLoader:
+                def __init__(self, vocab_size, batch_size, max_length, num_steps):
+                    self.vocab_size = vocab_size
+                    self.batch_size = batch_size
+                    self.max_length = max_length
+                    self.num_steps = num_steps
                     self.step = 0
-                self.step += 1
                 
-                # Generate random sequences
-                input_ids = torch.randint(0, self.vocab_size, (self.batch_size, self.max_length))
-                attention_mask = torch.ones_like(input_ids)
+                def __iter__(self):
+                    return self
                 
-                return {
-                    'input_ids': input_ids,
-                    'attention_mask': attention_mask,
-                    'labels': input_ids.clone()
-                }
-        
-        return RandomDataLoader(len(tokenizer), batch_size, max_length, num_steps), True
+                def __next__(self):
+                    if self.step >= self.num_steps:
+                        self.step = 0
+                    self.step += 1
+                    
+                    # Generate random sequences
+                    input_ids = torch.randint(0, self.vocab_size, (self.batch_size, self.max_length))
+                    attention_mask = torch.ones_like(input_ids)
+                    
+                    return {
+                        'input_ids': input_ids,
+                        'attention_mask': attention_mask,
+                        'labels': input_ids.clone()
+                    }
+            
+            return RandomDataLoader(len(tokenizer), batch_size, max_length, num_steps), True
 
 
 def setup_logging(log_dir):
@@ -279,33 +305,40 @@ def main():
     
     # Setup logging
     logger = setup_logging(args.output_dir)
-    logger.info("Starting BitNet 1B Parameter Training (Simplified Version)")
+    logger.info("Starting BitNet 1B Parameter Training with Llama 3 Tokenizer")
     logger.info(f"Configuration: {vars(args)}")
     
     # Device setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Using device: {device}")
     
-    # Load tokenizer
+    # Load Llama 3 tokenizer
     try:
         tokenizer = AutoTokenizer.from_pretrained(
-            os.getenv("TOKENIZER_NAME", "gpt2"),
+            os.getenv("TOKENIZER_NAME", "meta-llama/Meta-Llama-3-8B-Instruct"),
             token=os.getenv("HUGGINGFACE_TOKEN"),
             use_fast=True,
+            trust_remote_code=True
         )
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.eos_token else tokenizer.bos_token
         tokenizer.padding_side = 'left'
         vocab_size = len(tokenizer)
-        logger.info(f"Loaded tokenizer with vocabulary size: {vocab_size}")
+        logger.info(f"Loaded Llama 3 tokenizer with vocabulary size: {vocab_size}")
     except Exception as e:
-        logger.warning(f"Could not load tokenizer: {e}")
-        logger.warning("Using default vocabulary size")
-        vocab_size = 50257
-        tokenizer = None
+        logger.warning(f"Could not load Llama 3 tokenizer: {e}")
+        logger.warning("Falling back to GPT-2 tokenizer")
+        try:
+            tokenizer = AutoTokenizer.from_pretrained("gpt2")
+            tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.padding_side = 'left'
+            vocab_size = len(tokenizer)
+        except:
+            logger.error("Could not load any tokenizer")
+            return
     
-    # Create configuration
+    # Create configuration with Llama 3 vocab size (128256)
     config = BitNetConfig(
-        vocab_size=vocab_size,
+        vocab_size=vocab_size,  # This will be 128256 for Llama 3
         hidden_size=args.hidden_size,
         num_hidden_layers=args.num_hidden_layers,
         num_attention_heads=args.num_attention_heads,
@@ -335,16 +368,16 @@ def main():
     logger.info(f"Model size (FP32): {total_params * 4 / (1024**3):.2f} GB")
     logger.info(f"Model size (FP16): {total_params * 2 / (1024**3):.2f} GB")
     
-    # Create data loader
-    if tokenizer:
-        dataloader, is_random = create_data_loader(
-            tokenizer, args.batch_size, args.max_length, args.num_steps
-        )
-        if is_random:
-            logger.warning("Using random data for testing")
-    else:
+    # Create data loader with Llama 3 tokenizer
+    if not tokenizer:
         logger.error("No tokenizer available, cannot create data loader")
         return
+    
+    dataloader, is_random = create_data_loader(
+        tokenizer, args.batch_size, args.max_length, args.num_steps
+    )
+    if is_random:
+        logger.warning("Using random data for testing - this is not ideal for actual training")
     
     # Optimizer and scheduler
     optimizer = torch.optim.AdamW(
@@ -424,6 +457,7 @@ def main():
                         reserved = torch.cuda.memory_reserved() / 1024**3
                         logger.info(f"GPU Memory - Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB")
                 
+                # Save checkpoint
                 if global_step == args.save_steps:
                     checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                     os.makedirs(checkpoint_dir, exist_ok=True)
