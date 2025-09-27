@@ -274,9 +274,6 @@ class BitNetForCausalLM(nn.Module):
         if hasattr(self.model, 'config'):
             internal_use_early_exit = getattr(self.model.config, 'use_early_exit', 'Not found')
             if hasattr(self, '_debug_step') and self._debug_step < 3:  # Only log first few steps
-                print(f"Debug step {self._debug_step}: Internal use_early_exit = {internal_use_early_exit}")
-                print(f"Debug step {self._debug_step}: Input shapes - input_ids={input_ids.shape}, attention_mask={attention_mask.shape if attention_mask is not None else None}")
-                print(f"Debug step {self._debug_step}: Labels shape = {labels.shape if labels is not None else None}")
                 self._debug_step = getattr(self, '_debug_step', 0) + 1
         
         outputs = self.model(**model_inputs_no_loss)

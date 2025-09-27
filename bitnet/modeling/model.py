@@ -421,10 +421,6 @@ class BitNetModel(nn.Module):
                 
                 # Compute early exit loss if not skipped and early exit is enabled
                 if self.training and self.config.use_early_exit:
-                    print(f"DEBUG: Computing early exit loss for layer {layer_idx}")
-                    print(f"DEBUG: hidden_states shape: {hidden_states.shape}, stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
-                    print(f"DEBUG: skip_mask: {skip_mask}")
-                    print(f"DEBUG: curriculum_mask[{layer_idx}]: {self.early_exit_curriculum[layer_idx]}")
                     
                     with torch.autograd.profiler.record_function("EarlyExitLoss"):
                         layer_loss = compute_early_exit_loss_per_layer(
