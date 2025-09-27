@@ -412,19 +412,20 @@ class BitNetModel(nn.Module):
                     all_hidden_states.append(hidden_states)
                 
                 # Compute early exit loss if not skipped and early exit is enabled
-                if self.training and bool(self.config.use_early_exit):
-                    
-                    with torch.autograd.profiler.record_function("EarlyExitLoss"):
-                        layer_loss = compute_early_exit_loss_per_layer(
-                            hidden_states=hidden_states,
-                            target_ids=labels if labels is not None else input_ids,
-                            lm_head=self.lm_head,
-                            layer_idx=layer_idx,
-                            skip_mask=skip_mask,
-                            curriculum_mask=self.early_exit_curriculum
-                        )
-                        if layer_loss is not None:
-                            early_exit_losses.append((layer_idx, layer_loss))
+                if self.training and bool(self.config.use_early_exit) and labels is not None:
+                    # Add safety check for labels tensor
+                    if isinstance(labels, torch.Tensor) and labels.numel() > 0:
+                        with torch.autograd.profiler.record_function("EarlyExitLoss"):
+                            layer_loss = compute_early_exit_loss_per_layer(
+                                hidden_states=hidden_states,
+                                target_ids=labels,
+                                lm_head=self.lm_head,
+                                layer_idx=layer_idx,
+                                skip_mask=skip_mask,
+                                curriculum_mask=self.early_exit_curriculum
+                            )
+                            if layer_loss is not None:
+                                early_exit_losses.append((layer_idx, layer_loss))
                 
                 # Early exit if requested
                 if exit_layer is not None and layer_idx >= exit_layer:
