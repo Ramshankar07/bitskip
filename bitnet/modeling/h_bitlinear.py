@@ -133,20 +133,8 @@ class HBitLinear(nn.Module):
         # Return quantized values and scale for dequantization
         return x_scaled, scale
 
-    def compute_quantization_loss(self, original_weights: torch.Tensor, quantized_weights: torch.Tensor) -> torch.Tensor:
-        """
-        Compute quantization reconstruction error: ||W - W̃||²
-        
-        Args:
-            original_weights: Original full-precision weights
-            quantized_weights: Quantized weights
-            
-        Returns:
-            Quantization loss tensor
-        """
-        return F.mse_loss(original_weights, quantized_weights)
 
-    def forward(self, x: torch.Tensor, bits: int = 4, return_quantization_info: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
+    def forward(self, x: torch.Tensor, bits: int = 4, ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
         """
         Forward pass with Layer Normalization, Hadamard transformation, and quantization.
         
@@ -175,7 +163,7 @@ class HBitLinear(nn.Module):
         # Apply Hadamard transform to quantized input
         x_h = hadamard_transform(x_q)
 
-        quantization_info = {}
+
 
         # Quantize weights during forward pass (training with STE)
         if bool(self.training):
@@ -186,12 +174,7 @@ class HBitLinear(nn.Module):
             # Replace weights with quantized version for forward pass
             self.weight.data = w_q * w_scale
             
-            # Compute quantization loss if requested
-            if return_quantization_info:
-                quant_loss = self.compute_quantization_loss(w_original, w_q * w_scale)
-                quantization_info['weight_quantization_loss'] = quant_loss
-                quantization_info['original_weights'] = w_original
-                quantization_info['quantized_weights'] = w_q * w_scale
+
                 
             
             # Perform linear transformation

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BitNet 1B Parameter Training Script - Using Original BitNet Model
+BitNet 1B Parameter Training Script - Clean Implementation
 Uses Llama 3 tokenizer and FineWeb-Edu streaming dataset
 """
 
@@ -22,10 +22,6 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
-
-# Configure HuggingFace caching (optional)
-# os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"
-# os.environ["TRANSFORMERS_CACHE"] = "/tmp/hf_cache"
 
 # Import the original BitNet model
 from bitnet.modeling.model import BitNetModel
@@ -238,13 +234,21 @@ def parse_args():
     return parser.parse_args()
 
 
+def get_cosine_schedule(step, warmup_steps, base_lr):
+    """Get cosine learning rate schedule."""
+    if step < warmup_steps:
+        return base_lr * step / warmup_steps
+    else:
+        return base_lr * 0.5 * (1 + torch.cos(torch.tensor(3.14159 * (step - warmup_steps) / (1000 - warmup_steps))))
+
+
 def main():
     """Main training function."""
     args = parse_args()
     
     # Setup logging
     logger = setup_logging(args.output_dir)
-    logger.info("Starting BitNet 1B Parameter Training with Original BitNet Model")
+    logger.info("Starting BitNet 1B Parameter Training - Clean Implementation")
     logger.info(f"Configuration: {vars(args)}")
     
     # Device setup
@@ -326,88 +330,80 @@ def main():
         betas=(0.9, 0.98)
     )
     
-    # Create scheduler
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=args.num_steps,
-        eta_min=args.learning_rate * 0.1
-    )
-    
     # Gradient scaler for mixed precision
-    scaler = GradScaler('cuda', init_scale=2**10)
+    grad_scaler = GradScaler('cuda', init_scale=2**10)
     
-    # Training loop
+    # Training loop - Clean implementation similar to your example
     logger.info("Starting training loop")
-    global_step = 0
-    accumulated_loss = 0.0
     
     model.train()
     
-    for step in range(args.num_steps):
+    for step in range(1, args.num_steps + 1):
         try:
-            # Get batch
-            batch = next(iter(dataloader))
+            total_loss = 0
             
-            # Move to device
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
+            # Gradient Accumulation Loop
+            for micro_step in range(args.gradient_accumulation_steps):
+                # Get batch
+                batch = next(iter(dataloader))
+                
+                # Move to device
+                input_ids = batch['input_ids'].to(device)
+                attention_mask = batch['attention_mask'].to(device)
+                labels = batch['labels'].to(device)
+                
+                # Forward pass with mixed precision
+                with autocast('cuda', dtype=torch.float16):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels
+                    )
+                    loss = outputs['loss']
+                    
+                    # Normalize loss for gradient accumulation
+                    loss = loss / args.gradient_accumulation_steps
+                
+                # Backward pass (accumulates gradients)
+                grad_scaler.scale(loss).backward()
+                total_loss += loss.item()
             
-            # Forward pass with mixed precision
-            with autocast('cuda', dtype=torch.float16):
-                outputs = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels
-                )
-                loss = outputs['loss']
-                
-                # Scale loss for gradient accumulation
-                loss = loss / args.gradient_accumulation_steps
+            # Clip gradients after accumulation
+            grad_scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             
-            # Backward pass
-            scaler.scale(loss).backward()
-            accumulated_loss += loss.item()
+            # Update weights
+            grad_scaler.step(optimizer)
+            grad_scaler.update()
+            optimizer.zero_grad()
             
-            # Update weights every gradient_accumulation_steps
-            if (step + 1) % args.gradient_accumulation_steps == 0:
-                # Gradient clipping
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            # Update learning rate
+            current_lr = get_cosine_schedule(step, args.warmup_steps, args.learning_rate)
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = current_lr
+            
+            # Logging
+            if step % args.logging_steps == 0:
+                logger.info(f"Step {step}: Loss = {total_loss:.4f}, LR = {current_lr:.2e}")
                 
-                # Optimizer step
-                scaler.step(optimizer)
-                scaler.update()
-                scheduler.step()
-                optimizer.zero_grad()
+                # Memory stats
+                if torch.cuda.is_available():
+                    allocated = torch.cuda.memory_allocated() / 1024**3
+                    reserved = torch.cuda.memory_reserved() / 1024**3
+                    logger.info(f"GPU Memory - Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB")
+            
+            # Save checkpoint
+            if step % args.save_steps == 0:
+                checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{step}")
+                os.makedirs(checkpoint_dir, exist_ok=True)
                 
-                global_step += 1
+                # Save model
+                torch.save(model.state_dict(), os.path.join(checkpoint_dir, "model.pt"))
                 
-                # Logging
-                if global_step % args.logging_steps == 0:
-                    avg_loss = accumulated_loss * args.gradient_accumulation_steps
-                    current_lr = scheduler.get_last_lr()[0]
-                    logger.info(f"Step {global_step}: Loss = {avg_loss:.4f}, LR = {current_lr:.6e}")
-                    accumulated_loss = 0.0
-                    
-                    # Memory stats
-                    if torch.cuda.is_available():
-                        allocated = torch.cuda.memory_allocated() / 1024**3
-                        reserved = torch.cuda.memory_reserved() / 1024**3
-                        logger.info(f"GPU Memory - Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB")
+                # Save config
+                config.save_pretrained(checkpoint_dir)
                 
-                # Save checkpoint
-                if global_step == args.save_steps:
-                    checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                    os.makedirs(checkpoint_dir, exist_ok=True)
-                    
-                    # Save model
-                    torch.save(model.state_dict(), os.path.join(checkpoint_dir, "model.pt"))
-                    
-                    # Save config
-                    config.save_pretrained(checkpoint_dir)
-                    
-                    logger.info(f"Saved checkpoint to {checkpoint_dir}")
+                logger.info(f"Saved checkpoint to {checkpoint_dir}")
             
         except Exception as e:
             logger.error(f"Error at step {step}: {e}")

@@ -57,29 +57,7 @@ class BitTransformerBlock(nn.Module):
             dropout=config.hidden_dropout_prob
         )
     
-    def collect_quantization_losses(self) -> Dict[str, torch.Tensor]:
-        """
-        Collect quantization losses from attention and feed-forward components.
-        
-        Returns:
-            Dictionary containing quantization loss information
-        """
-        quantization_info = {}
-        
-        # Collect from self-attention
-        attn_quant_info = self.self_attn.collect_quantization_losses()
-        if attn_quant_info:
-            for key, value in attn_quant_info.items():
-                quantization_info[f"attention_{key}"] = value
-        
-        # Collect from feed-forward
-        ff_quant_info = self.feed_forward.collect_quantization_losses()
-        if ff_quant_info:
-            for key, value in ff_quant_info.items():
-                quantization_info[f"feedforward_{key}"] = value
-        
-        return quantization_info
-    
+
     def get_routing_decision(self, hidden_states: torch.Tensor, training: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Get routing decision for early exit.
@@ -102,7 +80,7 @@ class BitTransformerBlock(nn.Module):
         use_cache: bool = False,
         position_ids: Optional[torch.Tensor] = None,
         cache_position: Optional[torch.Tensor] = None,
-        return_quantization_info: bool = False,
+        
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Forward pass of the transformer block.
@@ -170,16 +148,7 @@ class BitTransformerBlock(nn.Module):
             if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                 print(f"ERROR: NaN/Inf detected in final hidden_states!")
             
-            # Collect quantization information if requested
-            if return_quantization_info:
-                quantization_info = self.collect_quantization_losses()
-                # Add quantization info as an attribute to the output
-                if hasattr(hidden_states, 'quantization_info'):
-                    # Merge with existing quantization info
-                    hidden_states.quantization_info.update(quantization_info)
-                else:
-                    # Create new quantization info attribute
-                    hidden_states.quantization_info = quantization_info
+            
             
             # Return output with optional cached key-values
             if use_cache:

@@ -13,12 +13,6 @@ import torch.nn.functional as F
 
 from .bitlinear import BitLinear
 from .rope import RotaryEmbedding
-from .kernels import (
-    bitnet_kernels,
-    bitlinear_forward_cuda,
-    attention_scores_cuda,
-    attention_output_cuda
-)
 
 
 class BitNetGQA(nn.Module):
@@ -82,44 +76,7 @@ class BitNetGQA(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.scale = 1 / math.sqrt(self.head_dim)
     
-    def collect_quantization_losses(self) -> Dict[str, torch.Tensor]:
-        """
-        Collect quantization losses from BitLinear layers.
-        
-        Returns:
-            Dictionary containing quantization loss information
-        """
-        quantization_info = {}
-        
-        # Collect from Q projection
-        if hasattr(self.q_proj, 'compute_quantization_loss'):
-            original_weights = self.q_proj.weight
-            w_q, w_scale = self.q_proj._weight_quantize(original_weights)
-            quant_loss = self.q_proj.compute_quantization_loss(original_weights, w_q * w_scale)
-            quantization_info['q_proj_quantization_loss'] = quant_loss
-        
-        # Collect from K projection
-        if hasattr(self.k_proj, 'compute_quantization_loss'):
-            original_weights = self.k_proj.weight
-            w_q, w_scale = self.k_proj._weight_quantize(original_weights)
-            quant_loss = self.k_proj.compute_quantization_loss(original_weights, w_q * w_scale)
-            quantization_info['k_proj_quantization_loss'] = quant_loss
-        
-        # Collect from V projection
-        if hasattr(self.v_proj, 'compute_quantization_loss'):
-            original_weights = self.v_proj.weight
-            w_q, w_scale = self.v_proj._weight_quantize(original_weights)
-            quant_loss = self.v_proj.compute_quantization_loss(original_weights, w_q * w_scale)
-            quantization_info['v_proj_quantization_loss'] = quant_loss
-        
-        # Collect from output projection
-        if hasattr(self.o_proj, 'compute_quantization_loss'):
-            original_weights = self.o_proj.weight
-            w_q, w_scale = self.o_proj._weight_quantize(original_weights)
-            quant_loss = self.o_proj.compute_quantization_loss(original_weights, w_q * w_scale)
-            quantization_info['o_proj_quantization_loss'] = quant_loss
-        
-        return quantization_info
+    
     
     def _repeat_kv(self, x: torch.Tensor, n_rep: int) -> torch.Tensor:
         """

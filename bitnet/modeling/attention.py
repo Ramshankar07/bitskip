@@ -12,12 +12,6 @@ import torch.nn.functional as F
 
 from .bitlinear import BitLinear
 from .rope import RotaryEmbedding
-from .kernels import (
-    bitnet_kernels,
-    bitlinear_forward_cuda,
-    attention_scores_cuda,
-    attention_output_cuda
-)
 
 
 class BitNetAttention(nn.Module):
@@ -67,32 +61,6 @@ class BitNetAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.scale = 1 / math.sqrt(self.head_dim)
     
-    def collect_quantization_losses(self) -> Dict[str, torch.Tensor]:
-        """
-        Collect quantization losses from BitLinear layers.
-        
-        Returns:
-            Dictionary containing quantization loss information
-        """
-        quantization_info = {}
-        
-        # Collect from QKV projections
-        for name, proj in [('q_proj', self.q_proj), ('k_proj', self.k_proj), ('v_proj', self.v_proj)]:
-            if hasattr(proj, 'compute_quantization_loss'):
-                # Get the current weights and compute quantization loss
-                original_weights = proj.weight
-                w_q, w_scale = proj._weight_quantize(original_weights)
-                quant_loss = proj.compute_quantization_loss(original_weights, w_q * w_scale)
-                quantization_info[f"{name}_quantization_loss"] = quant_loss
-        
-        # Collect from output projection
-        if hasattr(self.o_proj, 'compute_quantization_loss'):
-            original_weights = self.o_proj.weight
-            w_q, w_scale = self.o_proj._weight_quantize(original_weights)
-            quant_loss = self.o_proj.compute_quantization_loss(original_weights, w_q * w_scale)
-            quantization_info['o_proj_quantization_loss'] = quant_loss
-        
-        return quantization_info
     
     def _compute_attention(
         self,
@@ -120,103 +88,75 @@ class BitNetAttention(nn.Module):
         
         assert seq_len_k == seq_len_v, f"Key and value sequence lengths must match: {seq_len_k} vs {seq_len_v}"
         
-        if bitnet_kernels.is_available:
-            # Use CUDA kernel for attention computation
-            attn_scores = attention_scores_cuda(q, k, self.scale)
-            
-            if torch.isnan(attn_scores).any() or torch.isinf(attn_scores).any():
-                print(f"ERROR: NaN/Inf detected in attn_scores after CUDA kernel!")
-            
-            if attention_mask is not None:
-                # Prepare attention mask for CUDA kernel
-                if attention_mask.dim() == 2:
-                    attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
-                attn_scores = attn_scores + attention_mask
-            
-            # Apply softmax and dropout
-            attn_weights = F.softmax(attn_scores, dim=-1)
-            
-            if torch.isnan(attn_weights).any() or torch.isinf(attn_weights).any():
-                print(f"ERROR: NaN/Inf detected in attn_weights after softmax!")
-            
-            attn_weights = self.dropout(attn_weights)
-            
-            # Compute attention output using CUDA kernel
-            result = attention_output_cuda(attn_weights, v)
-            
-            if torch.isnan(result).any() or torch.isinf(result).any():
-                print(f"ERROR: NaN/Inf detected in result after attention_output_cuda!")
-            
-            return result
-        else:
+        
             # Calculate attention scores
             # q shape: (batch_size, num_heads, seq_len_q, head_dim)
             # k shape: (batch_size, num_heads, seq_len_k, head_dim)
             # attn_scores shape: (batch_size, num_heads, seq_len_q, seq_len_k)
             
             # Check if values are too large
-            if q.abs().max() > 1000 or k.abs().max() > 1000:
-                print(f"WARNING: Very large Q/K values detected!")
+        if q.abs().max() > 1000 or k.abs().max() > 1000:
+            print(f"WARNING: Very large Q/K values detected!")
             
-            attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
             
-            if torch.isnan(attn_scores).any() or torch.isinf(attn_scores).any():
-                print(f"ERROR: NaN/Inf detected in attn_scores after matmul!")
+        if torch.isnan(attn_scores).any() or torch.isinf(attn_scores).any():
+            print(f"ERROR: NaN/Inf detected in attn_scores after matmul!")
             
             # Verify attention scores shape
-            expected_scores_shape = (batch_size, num_heads, seq_len_q, seq_len_k)
-            assert attn_scores.shape == expected_scores_shape, f"Attention scores shape mismatch: {attn_scores.shape} vs {expected_scores_shape}"
+        expected_scores_shape = (batch_size, num_heads, seq_len_q, seq_len_k)
+        assert attn_scores.shape == expected_scores_shape, f"Attention scores shape mismatch: {attn_scores.shape} vs {expected_scores_shape}"
             
             # Apply attention mask if provided
-            if attention_mask is not None:
+        if attention_mask is not None:
                 # Get the key sequence length (which should match mask's last dimension)
-                seq_len_k = k.size(-2)
+            seq_len_k = k.size(-2)
                 
                 # Ensure attention mask has the right shape
-                if attention_mask.dim() == 2:
+            if attention_mask.dim() == 2:
                     # attention_mask shape: (batch_size, seq_len)
                     # We need shape: (batch_size, 1, 1, seq_len)
                     attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
-                elif attention_mask.dim() == 3:
+            elif attention_mask.dim() == 3:
                     # attention_mask shape: (batch_size, 1, seq_len)
                     # We need shape: (batch_size, 1, 1, seq_len)
                     attention_mask = attention_mask.unsqueeze(1)
                 
                 # Ensure mask matches the key sequence length
-                if attention_mask.size(-1) != seq_len_k:
+            if attention_mask.size(-1) != seq_len_k:
                     # This can happen with cached keys - adjust mask
                     attention_mask = F.pad(attention_mask, (0, seq_len_k - attention_mask.size(-1)), value=1.0)
                 
                 # Apply mask (use large negative value for masked positions)
                 # Note: attention_mask is 1 for positions to attend and 0 for positions to mask
-                attn_scores = attn_scores + (1.0 - attention_mask) * -10000.0
+            attn_scores = attn_scores + (1.0 - attention_mask) * -10000.0
             
             # Apply softmax and dropout
-            attn_weights = F.softmax(attn_scores, dim=-1)
+        attn_weights = F.softmax(attn_scores, dim=-1)
             
-            if torch.isnan(attn_weights).any() or torch.isinf(attn_weights).any():
-                print(f"ERROR: NaN/Inf detected in attn_weights after softmax!")
+        if torch.isnan(attn_weights).any() or torch.isinf(attn_weights).any():
+            print(f"ERROR: NaN/Inf detected in attn_weights after softmax!")
             
-            attn_weights = self.dropout(attn_weights)
+        attn_weights = self.dropout(attn_weights)
             
             # Verify attention weights shape before matmul
-            expected_weights_shape = (batch_size, num_heads, seq_len_q, seq_len_k)
-            assert attn_weights.shape == expected_weights_shape, f"Attention weights shape mismatch: {attn_weights.shape} vs {expected_weights_shape}"
+        expected_weights_shape = (batch_size, num_heads, seq_len_q, seq_len_k)
+        assert attn_weights.shape == expected_weights_shape, f"Attention weights shape mismatch: {attn_weights.shape} vs {expected_weights_shape}"
             
             # Apply attention to values
             # attn_weights shape: (batch_size, num_heads, seq_len_q, seq_len_k)
             # v shape: (batch_size, num_heads, seq_len_v, head_dim)
             # output shape: (batch_size, num_heads, seq_len_q, head_dim)
-            attn_output = torch.matmul(attn_weights, v)
+        attn_output = torch.matmul(attn_weights, v)
             
-            if torch.isnan(attn_output).any() or torch.isinf(attn_output).any():
-                print(f"ERROR: NaN/Inf detected in attn_output after final matmul!")
+        if torch.isnan(attn_output).any() or torch.isinf(attn_output).any():
+            print(f"ERROR: NaN/Inf detected in attn_output after final matmul!")
             
             # Verify output shape
-            expected_output_shape = (batch_size, num_heads, seq_len_q, head_dim)
-            assert attn_output.shape == expected_output_shape, f"Attention output shape mismatch: {attn_output.shape} vs {expected_output_shape}"
+        expected_output_shape = (batch_size, num_heads, seq_len_q, head_dim)
+        assert attn_output.shape == expected_output_shape, f"Attention output shape mismatch: {attn_output.shape} vs {expected_output_shape}"
             
-            return attn_output
+        return attn_output
     
     def forward(
         self,

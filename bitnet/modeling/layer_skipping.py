@@ -12,7 +12,6 @@ import torch.nn as nn
 import logging
 from dataclasses import dataclass
 
-from .kernels import bitnet_kernels, layer_skip_decision_cuda
 from ..utils.default_config import DefaultConfig
 
 logger = logging.getLogger(__name__)
@@ -73,7 +72,7 @@ class LayerSkipping(nn.Module):
         probs = []
         for i in range(self.num_layers):
             # Quadratic dropout: p_l = p_max * (l/L)^2
-            prob = self.max_dropout_rate * ((i / (self.num_layers - 1)) ** 2)
+            prob = self.max_dropout_rate * ((i / max(self.num_layers - 1, 1)) ** 2)
             probs.append(prob)
         return probs
     

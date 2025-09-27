@@ -9,15 +9,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .kernels import (
-    bitnet_kernels,
-    ternary_quantize_cuda,
-    activation_quantize_cuda,
-    bitlinear_forward_cuda,
-    squared_relu_cuda
-)
-
-
 def squared_relu(x: torch.Tensor) -> torch.Tensor:
     """
     Squared ReLU activation function.
@@ -28,8 +19,7 @@ def squared_relu(x: torch.Tensor) -> torch.Tensor:
     Returns:
         Activated tensor
     """
-    if bitnet_kernels.is_available:
-        return squared_relu_cuda(x)
+    
     return torch.relu(x) ** 2
 
 
@@ -82,10 +72,7 @@ class BitLinear(nn.Module):
             
         Returns:
             Tuple of (quantized weights, scale factor)
-        """
-        if bitnet_kernels.is_available:
-            return ternary_quantize_cuda(w)
-            
+        """    
         # Calculate the scaling factor (mean of absolute values)
         scale = w.abs().mean()
         # Store scale for dequantization
@@ -110,8 +97,7 @@ class BitLinear(nn.Module):
         if bits is None:
             bits = self.activation_bits
             
-        if bitnet_kernels.is_available:
-            return activation_quantize_cuda(x, bits)
+        
             
         # Calculate scaling factor (max of absolute values per token)
         scale = x.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-5)
@@ -121,20 +107,8 @@ class BitLinear(nn.Module):
         # Return quantized values and scale for dequantization
         return x_scaled, scale
     
-    def compute_quantization_loss(self, original_weights: torch.Tensor, quantized_weights: torch.Tensor) -> torch.Tensor:
-        """
-        Compute quantization reconstruction error: ||W - W̃||²
-        
-        Args:
-            original_weights: Original full-precision weights
-            quantized_weights: Quantized weights
-            
-        Returns:
-            Quantization loss tensor
-        """
-        return F.mse_loss(original_weights, quantized_weights)
-    
-    def forward(self, x: torch.Tensor, bits: Optional[int] = None, return_quantization_info: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
+
+    def forward(self, x: torch.Tensor, bits: Optional[int] = None, ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
         """
         Forward pass with quantization.
         
@@ -152,7 +126,7 @@ class BitLinear(nn.Module):
         # Quantize input activations for both training and inference
         x_q, x_scale = self._activation_quantize(x, bits)
         
-        quantization_info = {}
+
         
         if bool(self.training):
             # During training, use Straight-Through Estimator for backprop
@@ -164,19 +138,7 @@ class BitLinear(nn.Module):
             if w_scale / x_scale > 1000:
                 print(f"WARNING: Extreme scaling ratio detected!")
             
-            # Compute quantization loss if requested
-            if return_quantization_info:
-                quant_loss = self.compute_quantization_loss(w_original, w_q * w_scale)
-                quantization_info['weight_quantization_loss'] = quant_loss
-                quantization_info['original_weights'] = w_original
-                quantization_info['quantized_weights'] = w_q * w_scale
-                
-            
-            # Perform linear transformation with quantized input
-            if bitnet_kernels.is_available:
-                output = bitlinear_forward_cuda(x_q, self.weight, self.bias) / x_scale
-            else:
-                output = F.linear(x_q, self.weight, self.bias) / x_scale
+            output = F.linear(x_q, self.weight, self.bias) / x_scale
             
             if torch.isnan(output).any() or torch.isinf(output).any():
                 print(f"ERROR: NaN/Inf detected in BitLinear output before squared_relu!")
@@ -186,23 +148,8 @@ class BitLinear(nn.Module):
             # During inference, use quantized weights directly
             w_q, w_scale = self._weight_quantize(self.weight)
             
-            # Compute quantization loss if requested (for evaluation)
-            if return_quantization_info:
-                quant_loss = self.compute_quantization_loss(self.weight, w_q * w_scale)
-                quantization_info['weight_quantization_loss'] = quant_loss
-                quantization_info['original_weights'] = self.weight
-                quantization_info['quantized_weights'] = w_q * w_scale
-            
             # Matrix multiplication with quantized values
-            if bitnet_kernels.is_available:
-                output = bitlinear_forward_cuda(x_q, w_q * w_scale, self.bias) / x_scale
-            else:
-                output = F.linear(x_q, w_q * w_scale, self.bias) / x_scale
-        
+            output = F.linear(x_q, w_q * w_scale, self.bias) / x_scale
         # Apply Squared ReLU activation
         output = squared_relu(output)
-        
-        if return_quantization_info:
-            return output, quantization_info
-        else:
-            return output 
+        return output 

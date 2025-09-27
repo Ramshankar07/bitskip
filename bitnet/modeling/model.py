@@ -277,7 +277,7 @@ class BitNetModel(nn.Module):
                 if k not in ['exit_layer', 'training_step', 'labels']
             }
             
-            if self.gradient_checkpointing and bool(self.training):
+            if self.gradient_checkpointing and getattr(self, 'training', False) is True:
                 # Use gradient checkpointing with explicit use_reentrant=False
                 return checkpoint(
                     layer,
@@ -412,7 +412,7 @@ class BitNetModel(nn.Module):
                     all_hidden_states.append(hidden_states)
                 
                 # Compute early exit loss if not skipped and early exit is enabled
-                if self.training is True and bool(getattr(self.config, 'use_early_exit', False)) and labels is not None:
+                if getattr(self, 'training', False) is True and bool(getattr(self.config, 'use_early_exit', False)) and labels is not None:
                     # Add safety check for labels tensor
                     if isinstance(labels, torch.Tensor) and labels.numel() > 0:
                         with torch.autograd.profiler.record_function("EarlyExitLoss"):
@@ -454,7 +454,7 @@ class BitNetModel(nn.Module):
                     print(f"ERROR: NaN/Inf detected in main loss!")
                 
                 # Add early exit losses if any and early exit is enabled
-                if self.training is True and early_exit_losses and bool(getattr(self.config, 'use_early_exit', False)):
+                if getattr(self, 'training', False) is True and early_exit_losses and bool(getattr(self.config, 'use_early_exit', False)):
                     early_exit_loss = compute_early_exit_loss(
                         all_hidden_states, # Pass all hidden states for loss computation
                         labels,
