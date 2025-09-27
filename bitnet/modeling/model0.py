@@ -149,7 +149,7 @@ class BitNetModel0(nn.Module):
                 if k not in ['exit_layer', 'training_step', 'labels']
             }
             
-            if self.gradient_checkpointing and self.training:
+            if self.gradient_checkpointing and bool(self.training):
                 # Use gradient checkpointing with explicit use_reentrant=False
                 return torch.utils.checkpoint.checkpoint(
                     layer,

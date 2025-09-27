@@ -178,7 +178,7 @@ class HBitLinear(nn.Module):
         quantization_info = {}
 
         # Quantize weights during forward pass (training with STE)
-        if self.training:
+        if bool(self.training):
             # During training, use Straight-Through Estimator for backprop
             w_q, w_scale = self._weight_quantize(self.weight)
             # Store original weights for backward pass

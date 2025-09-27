@@ -160,13 +160,13 @@ class LayerSkipping(nn.Module):
         batch_size = hidden_states.size(0)
         
         # Generate skip decisions for this layer
-        if self.training and layer_idx < self.num_layers - 1:  # Never skip last layer
+        if bool(self.training) and layer_idx < self.num_layers - 1:  # Never skip last layer
             skip_prob = self.dropout_probs[layer_idx]
             skip_mask = torch.rand(batch_size, device=hidden_states.device) < skip_prob
         else:
             skip_mask = torch.zeros(batch_size, dtype=torch.bool, device=hidden_states.device)
         
-        if skip_mask.any().item() and self.training:
+        if skip_mask.any().item() and bool(self.training):
             # Process only non-skipped samples
             non_skip_indices = (~skip_mask).nonzero(as_tuple=True)[0]
             

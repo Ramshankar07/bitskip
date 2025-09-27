@@ -248,7 +248,7 @@ class BitNetModel2(nn.Module):
                 if k not in ['exit_layer', 'training_step', 'labels']
             }
             
-            if self.gradient_checkpointing and self.training:
+            if self.gradient_checkpointing and bool(self.training):
                 # Use gradient checkpointing with explicit use_reentrant=False
                 return torch.utils.checkpoint.checkpoint(
                     layer,
@@ -351,7 +351,7 @@ class BitNetModel2(nn.Module):
                     all_hidden_states.append(hidden_states)
                 
                 # Compute early exit loss if not skipped
-                if self.training:
+                if bool(self.training):
                     with torch.autograd.profiler.record_function("EarlyExitLoss"):
                         layer_loss = compute_early_exit_loss_per_layer(
                             hidden_states=hidden_states,
@@ -384,7 +384,7 @@ class BitNetModel2(nn.Module):
                 loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
                 
                 # Add early exit losses if any
-                if self.training and early_exit_losses:
+                if bool(self.training) and early_exit_losses:
                     early_exit_loss = compute_early_exit_loss(
                         all_hidden_states, # Pass all hidden states for loss computation
                         labels,
