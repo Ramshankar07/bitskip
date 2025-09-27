@@ -252,7 +252,7 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
                         'labels': input_ids.clone()
                     }
             
-            return RandomDataLoader(vocab_size, batch_size, max_length, num_steps), True
+            return RandomDataLoader(len(tokenizer), batch_size, max_length, num_steps), True
 
 
 def setup_logging(log_dir):
