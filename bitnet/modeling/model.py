@@ -54,7 +54,7 @@ def compute_early_exit_loss_per_layer(
     print(f"DEBUG: compute_early_exit_loss_per_layer - layer {layer_idx}")
     print(f"DEBUG: curriculum_mask[{layer_idx}]: {curriculum_mask[layer_idx]}")
     
-    if not curriculum_mask[layer_idx]:
+    if not curriculum_mask[layer_idx].item():
         print(f"DEBUG: Layer {layer_idx} not in curriculum, returning None")
         return None
         
@@ -711,7 +711,7 @@ class BitNetModel(nn.Module):
                         break  # Stop after first rejection
                 
                 # Update generated sequence
-                if accepted_tokens:
+                if len(accepted_tokens) > 0:
                     generated = torch.cat([generated[:, :-num_speculations]] + accepted_tokens, dim=1)
                     attention_mask = torch.ones_like(generated)
             

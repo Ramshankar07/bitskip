@@ -49,7 +49,7 @@ def compute_early_exit_loss_per_layer(
 ) -> Optional[torch.Tensor]:
     """Compute early exit loss for samples that didn't skip this layer."""
     
-    if not curriculum_mask[layer_idx]:
+    if not curriculum_mask[layer_idx].item():
         return None
         
     # Only compute loss for non-skipped samples
@@ -637,7 +637,7 @@ class BitNetModel2(nn.Module):
                         break  # Stop after first rejection
                 
                 # Update generated sequence
-                if accepted_tokens:
+                if len(accepted_tokens) > 0:
                     generated = torch.cat([generated[:, :-num_speculations]] + accepted_tokens, dim=1)
                     attention_mask = torch.ones_like(generated)
             
