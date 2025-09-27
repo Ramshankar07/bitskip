@@ -390,7 +390,7 @@ def train():
     )
     
     # Initialize gradient scaler for FP16 training
-    scaler = GradScaler(
+    scaler = torch.amp.GradScaler('cuda',
         init_scale=2**10,
         growth_factor=2.0,
         backoff_factor=0.5,
@@ -426,7 +426,7 @@ def train():
             labels = batch['labels'].to(device)
             
             # Forward pass with mixed precision
-            with autocast():
+            with torch.amp.autocast('cuda'):
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
