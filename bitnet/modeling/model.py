@@ -412,7 +412,7 @@ class BitNetModel(nn.Module):
                     all_hidden_states.append(hidden_states)
                 
                 # Compute early exit loss if not skipped and early exit is enabled
-                if bool(self.training) and bool(self.config.use_early_exit) and labels is not None:
+                if bool(self.training) and bool(getattr(self.config, 'use_early_exit', False)) and labels is not None:
                     # Add safety check for labels tensor
                     if isinstance(labels, torch.Tensor) and labels.numel() > 0:
                         with torch.autograd.profiler.record_function("EarlyExitLoss"):
@@ -454,7 +454,7 @@ class BitNetModel(nn.Module):
                     print(f"ERROR: NaN/Inf detected in main loss!")
                 
                 # Add early exit losses if any and early exit is enabled
-                if bool(self.training) and early_exit_losses and bool(self.config.use_early_exit):
+                if bool(self.training) and early_exit_losses and bool(getattr(self.config, 'use_early_exit', False)):
                     early_exit_loss = compute_early_exit_loss(
                         all_hidden_states, # Pass all hidden states for loss computation
                         labels,
