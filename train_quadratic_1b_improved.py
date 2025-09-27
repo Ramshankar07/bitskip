@@ -196,9 +196,7 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
             batch_size=batch_size,
             max_length=max_length,
             streaming=True,
-            text_column="text",
-            num_workers=0,  # Avoid multiprocessing issues
-            shuffle_buffer_size=10000
+            text_column="text"
         )
         
         logger.info("Successfully created streaming dataloader")
@@ -218,8 +216,7 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
                 batch_size=batch_size,
                 max_length=max_length,
                 streaming=True,
-                text_column="text",
-                num_workers=0
+                text_column="text"
             )
             logger.info("Successfully loaded alternative dataset")
             return dataloader, False
@@ -255,7 +252,7 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
                         'labels': input_ids.clone()
                     }
             
-            return RandomDataLoader(len(tokenizer), batch_size, max_length, num_steps), True
+            return RandomDataLoader(vocab_size, batch_size, max_length, num_steps), True
 
 
 def setup_logging(log_dir):
