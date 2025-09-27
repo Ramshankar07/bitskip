@@ -13,7 +13,6 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from .layer_skipping import LayerSkipping, LayerSkipState
 from .transformer import BitTransformerBlock
-from .routing import RoutingLoss
 from ..utils.default_config import DefaultConfig
 
 # Configure logging
@@ -209,43 +208,9 @@ class BitNetModel(nn.Module):
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
     
-    def collect_quantization_losses(self) -> Dict[str, torch.Tensor]:
-        """
-        Collect quantization losses from all BitLinear layers in the model.
-        
-        Returns:
-            Dictionary containing quantization loss information
-        """
-        quantization_info = {}
-        
-        # Collect from transformer layers
-        for layer_idx, layer in enumerate(self.layers):
-            layer_quant_info = layer.collect_quantization_losses()
-            if layer_quant_info:
-                for key, value in layer_quant_info.items():
-                    quantization_info[f"layer_{layer_idx}_{key}"] = value
-        
-        return quantization_info
     
-    def collect_routing_losses(self) -> Dict[str, torch.Tensor]:
-        """
-        Collect routing losses from layer skipping mechanism.
-        
-        Returns:
-            Dictionary containing routing loss information
-        """
-        routing_info = {}
-        
-        # Collect skip masks from layer skipping
-        if hasattr(self.layer_skipping, 'skip_masks'):
-            skip_masks = self.layer_skipping.skip_masks
-            if skip_masks is not None:
-                # Compute routing loss as expected computational cost
-                active_layers = ~skip_masks
-                expected_cost = torch.mean(torch.sum(active_layers.float(), dim=0))
-                routing_info['routing_loss'] = expected_cost
-        
-        return routing_info
+    
+    
     
     
     def gradient_checkpointing_enable(self) -> None:
@@ -472,11 +437,6 @@ class BitNetModel(nn.Module):
             if not output_hidden_states:
                 all_hidden_states = None
 
-            # Collect quantization information if requested
-            quantization_info = None
-            if return_quantization_info:
-                quantization_info = self.collect_quantization_losses()
-
             # Create the output object
             output = CausalLMOutputWithPast(
                 loss=loss,
@@ -485,7 +445,7 @@ class BitNetModel(nn.Module):
                 past_key_values=None  # We don't use KV cache in this implementation
             )
             
-            # Add quantization info as an attribute if requested\
+            
             
             return output
     
