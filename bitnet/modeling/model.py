@@ -381,8 +381,8 @@ class BitNetModel(nn.Module):
             
             if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                 print(f"ERROR: NaN/Inf detected in hidden_states after embeddings!")
-                print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum().item()}")
             
             # Initialize layer outputs
             all_hidden_states = []  # Always collect for early exit loss
@@ -394,8 +394,8 @@ class BitNetModel(nn.Module):
                 
                 if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                     print(f"ERROR: NaN/Inf detected in hidden_states before layer {layer_idx}!")
-                    print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum()}")
-                    print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum()}")
+                    print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum().item()}")
+                    print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum().item()}")
                     break
                 
                 # Get layer function
@@ -440,8 +440,8 @@ class BitNetModel(nn.Module):
                 
                 if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                     print(f"ERROR: NaN/Inf detected in hidden_states after layer {layer_idx}!")
-                    print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum()}")
-                    print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum()}")
+                    print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum().item()}")
+                    print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum().item()}")
                     break  # Stop processing to prevent further NaN propagation
                 
                 # Store hidden states if requested
@@ -489,8 +489,8 @@ class BitNetModel(nn.Module):
             
             if torch.isnan(logits).any() or torch.isinf(logits).any():
                 print(f"ERROR: NaN/Inf detected in logits!")
-                print(f"ERROR: Logits NaN count: {torch.isnan(logits).sum()}")
-                print(f"ERROR: Logits Inf count: {torch.isinf(logits).sum()}")
+                print(f"ERROR: Logits NaN count: {torch.isnan(logits).sum().item()}")
+                print(f"ERROR: Logits Inf count: {torch.isinf(logits).sum().item()}")
             
             # Compute loss if labels are provided
             loss = None

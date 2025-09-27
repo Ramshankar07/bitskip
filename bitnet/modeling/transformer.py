@@ -147,8 +147,8 @@ class BitTransformerBlock(nn.Module):
             
             if torch.isnan(attn_output).any() or torch.isinf(attn_output).any():
                 print(f"ERROR: NaN/Inf detected in attn_output!")
-                print(f"ERROR: NaN count: {torch.isnan(attn_output).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(attn_output).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(attn_output).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_output).sum().item()}")
             
             # Apply dropout to attention output
             attn_output = self.dropout(attn_output)
@@ -160,8 +160,8 @@ class BitTransformerBlock(nn.Module):
             
             if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                 print(f"ERROR: NaN/Inf detected in hidden_states after self_attn_norm!")
-                print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum().item()}")
             
             # Store new residual
             residual = hidden_states
@@ -173,8 +173,8 @@ class BitTransformerBlock(nn.Module):
             
             if torch.isnan(ff_output).any() or torch.isinf(ff_output).any():
                 print(f"ERROR: NaN/Inf detected in ff_output!")
-                print(f"ERROR: NaN count: {torch.isnan(ff_output).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(ff_output).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(ff_output).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(ff_output).sum().item()}")
             
             # Apply dropout to feed-forward output
             ff_output = self.dropout(ff_output)
@@ -186,8 +186,8 @@ class BitTransformerBlock(nn.Module):
             
             if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                 print(f"ERROR: NaN/Inf detected in final hidden_states!")
-                print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum().item()}")
             
             # Collect quantization information if requested
             if return_quantization_info:

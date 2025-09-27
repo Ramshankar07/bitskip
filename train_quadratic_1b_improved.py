@@ -293,12 +293,12 @@ class BitNetForCausalLM(nn.Module):
         loss = None
         if labels is not None:
             print(f"DEBUG: Computing loss in wrapper - logits shape: {logits.shape}, labels shape: {labels.shape}")
-            print(f"DEBUG: Logits stats: min={logits.min():.4f}, max={logits.max():.4f}, mean={logits.mean():.4f}")
+            print(f"DEBUG: Logits stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, mean={logits.mean().item():.4f}")
             
             if torch.isnan(logits).any() or torch.isinf(logits).any():
                 print(f"ERROR: NaN/Inf detected in wrapper logits!")
-                print(f"ERROR: Logits NaN count: {torch.isnan(logits).sum()}")
-                print(f"ERROR: Logits Inf count: {torch.isinf(logits).sum()}")
+                print(f"ERROR: Logits NaN count: {torch.isnan(logits).sum().item()}")
+                print(f"ERROR: Logits Inf count: {torch.isinf(logits).sum().item()}")
             
             # Shift so that tokens < n predict n
             shift_logits = logits[..., :-1, :].contiguous()
@@ -398,7 +398,7 @@ def verify_model_initialization(model):
         
         # Check for extreme values
         if param.abs().max() > 100:
-            print(f"Large values in {name}: max={param.abs().max()}")
+            print(f"Large values in {name}: max={param.abs().max().item()}")
     return True
 
 def setup_logging(log_dir: str):
@@ -645,8 +645,8 @@ def main():
             # Debug: Check input data (only on first step)
             if global_step == 0:
                 logger.info(f"Input shapes: input_ids={tensor_inputs['input_ids'].shape}, labels={tensor_inputs['labels'].shape}")
-                logger.info(f"Input IDs range: {tensor_inputs['input_ids'].min()} to {tensor_inputs['input_ids'].max()}")
-                logger.info(f"Labels range: {tensor_inputs['labels'].min()} to {tensor_inputs['labels'].max()}")
+                logger.info(f"Input IDs range: {tensor_inputs['input_ids'].min().item()} to {tensor_inputs['input_ids'].max().item()}")
+                logger.info(f"Labels range: {tensor_inputs['labels'].min().item()} to {tensor_inputs['labels'].max().item()}")
                 logger.info(f"Attention mask shape: {tensor_inputs['attention_mask'].shape}")
             
             
