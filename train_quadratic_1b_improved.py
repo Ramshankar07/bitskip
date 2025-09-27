@@ -194,10 +194,12 @@ class BitNetForCausalLM(nn.Module):
             initializer_range=config.initializer_range,
             activation_bits=config.activation_bits,
             weight_bits=config.weight_bits,
-            use_layer_skipping=config.use_layer_skipping,
+            # Force boolean conversion here
+            use_layer_skipping=bool(config.use_layer_skipping) if not isinstance(config.use_layer_skipping, bool) else config.use_layer_skipping,
             skip_probability=config.skip_probability,
             min_layers_to_keep=config.min_layers_to_keep,
-            use_early_exit=config.use_early_exit,
+            # Force early exit to be False and ensure it's a Python bool
+            use_early_exit=False,  # Always False to avoid early exit code
             early_exit_threshold=config.early_exit_threshold
         )
     
@@ -310,7 +312,7 @@ class BitNetForCausalLM(nn.Module):
                 print("Warning: Empty sequence after shifting, using dummy loss")
                 # Handle empty sequence case
                 loss = torch.tensor(0.0, device=logits.device, requires_grad=True)
-            else:
+            elif shift_logits.size(1) > 0:
                 # Flatten the tokens
                 loss_fct = nn.CrossEntropyLoss()
                 shift_logits = shift_logits.view(-1, self.config.vocab_size)
