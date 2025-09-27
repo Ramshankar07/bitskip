@@ -106,22 +106,26 @@ class BitNetConfig:
         self.activation_bits = activation_bits
         self.weight_bits = weight_bits
         
-        # Layer skipping parameters
-        self.use_layer_skipping = use_layer_skipping
+        # Layer skipping parameters - ensure boolean conversion
+        self.use_layer_skipping = bool(use_layer_skipping) if not isinstance(use_layer_skipping, bool) else use_layer_skipping
         self.skip_probability = skip_probability
         self.min_layers_to_keep = min_layers_to_keep
         
-        # Early exit parameters
-        self.use_early_exit = use_early_exit
+        # Early exit parameters - ensure boolean conversion
+        self.use_early_exit = bool(use_early_exit) if not isinstance(use_early_exit, bool) else use_early_exit
         self.early_exit_threshold = early_exit_threshold
         
         # Quadratic schedule parameters
         self.dropout_schedule = dropout_schedule
         self.quadratic_constant = quadratic_constant
         
-        # Additional parameters
+        # Additional parameters - ensure boolean conversion for any boolean kwargs
         for key, value in kwargs.items():
-            setattr(self, key, value)
+            if isinstance(value, bool) or (hasattr(value, '__bool__') and not isinstance(value, (int, float, str))):
+                # Force boolean conversion for any potential tensor-like boolean values
+                setattr(self, key, bool(value))
+            else:
+                setattr(self, key, value)
     
     def to_dict(self):
         """Convert config to dictionary for serialization."""
@@ -268,26 +272,12 @@ class BitNetForCausalLM(nn.Module):
             'training_step': 0  # Add training step to prevent early exit issues
         }
         
-        # Minimal forward pass through internal model with error handling
-        try:
-            print(f"DEBUG: About to call model.forward with input_ids.shape={input_ids.shape}")
-            outputs = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                output_hidden_states=output_hidden_states
-            )
-            print(f"DEBUG: Model forward completed successfully")
-        except Exception as e:
-            print(f"DEBUG: Error in model forward: {e}")
-            print(f"DEBUG: Error type: {type(e)}")
-            # Try even simpler forward pass
-            try:
-                print(f"DEBUG: Trying minimal forward pass")
-                outputs = self.model(input_ids=input_ids)
-                print(f"DEBUG: Minimal forward pass completed")
-            except Exception as e2:
-                print(f"DEBUG: Even minimal forward pass failed: {e2}")
-                raise e2
+        # Forward pass through internal model (labels excluded to avoid boolean tensor errors)
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=output_hidden_states
+        )
         
         # Get logits from the internal model's LM head
         if hasattr(outputs, 'logits'):
