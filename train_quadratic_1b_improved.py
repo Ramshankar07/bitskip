@@ -266,17 +266,26 @@ class BitNetForCausalLM(nn.Module):
             'training_step': 0  # Add training step to prevent early exit issues
         }
         
-        # Forward pass through internal model without loss computation
-        model_inputs_no_loss = {k: v for k, v in model_inputs.items() if k != 'labels'}
-        
-        # Forward pass through internal model
-        # Debug: Check early exit config before forward pass
-        if hasattr(self.model, 'config'):
-            internal_use_early_exit = getattr(self.model.config, 'use_early_exit', 'Not found')
-            if hasattr(self, '_debug_step') and self._debug_step < 3:  # Only log first few steps
-                self._debug_step = getattr(self, '_debug_step', 0) + 1
-        
-        outputs = self.model(**model_inputs_no_loss)
+        # Minimal forward pass through internal model with error handling
+        try:
+            print(f"DEBUG: About to call model.forward with input_ids.shape={input_ids.shape}")
+            outputs = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=output_hidden_states
+            )
+            print(f"DEBUG: Model forward completed successfully")
+        except Exception as e:
+            print(f"DEBUG: Error in model forward: {e}")
+            print(f"DEBUG: Error type: {type(e)}")
+            # Try even simpler forward pass
+            try:
+                print(f"DEBUG: Trying minimal forward pass")
+                outputs = self.model(input_ids=input_ids)
+                print(f"DEBUG: Minimal forward pass completed")
+            except Exception as e2:
+                print(f"DEBUG: Even minimal forward pass failed: {e2}")
+                raise e2
         
         # Get logits from the internal model's LM head
         if hasattr(outputs, 'logits'):
