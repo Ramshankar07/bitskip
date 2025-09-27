@@ -121,10 +121,7 @@ class BitTransformerBlock(nn.Module):
         with torch.autograd.profiler.record_function("TransformerBlock.forward"):
             # Store residual for later
             residual = hidden_states
-            print(f"DEBUG: TransformerBlock input - hidden_states stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
-            
             # Self attention
-            print(f"DEBUG: Before self_attn - hidden_states stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
             attn_outputs = self.self_attn(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -143,51 +140,35 @@ class BitTransformerBlock(nn.Module):
                 attn_output = attn_outputs
                 present_key_value = None
             
-            print(f"DEBUG: After self_attn - attn_output stats: min={attn_output.min().item():.4f}, max={attn_output.max().item():.4f}, mean={attn_output.mean().item():.4f}")
-            
             if torch.isnan(attn_output).any() or torch.isinf(attn_output).any():
                 print(f"ERROR: NaN/Inf detected in attn_output!")
-                print(f"ERROR: NaN count: {torch.isnan(attn_output).sum().item()}")
-                print(f"ERROR: Inf count: {torch.isinf(attn_output).sum().item()}")
             
             # Apply dropout to attention output
             attn_output = self.dropout(attn_output)
-            print(f"DEBUG: After dropout - attn_output stats: min={attn_output.min().item():.4f}, max={attn_output.max().item():.4f}, mean={attn_output.mean().item():.4f}")
             
             # Apply sublayer norm with residual connection
             hidden_states = self.self_attn_norm(attn_output, residual)
-            print(f"DEBUG: After self_attn_norm - hidden_states stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
             
             if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                 print(f"ERROR: NaN/Inf detected in hidden_states after self_attn_norm!")
-                print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum().item()}")
-                print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum().item()}")
             
             # Store new residual
             residual = hidden_states
             
             # Feed forward
-            print(f"DEBUG: Before feed_forward - hidden_states stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
             ff_output = self.feed_forward(hidden_states)
-            print(f"DEBUG: After feed_forward - ff_output stats: min={ff_output.min().item():.4f}, max={ff_output.max().item():.4f}, mean={ff_output.mean().item():.4f}")
             
             if torch.isnan(ff_output).any() or torch.isinf(ff_output).any():
                 print(f"ERROR: NaN/Inf detected in ff_output!")
-                print(f"ERROR: NaN count: {torch.isnan(ff_output).sum().item()}")
-                print(f"ERROR: Inf count: {torch.isinf(ff_output).sum().item()}")
             
             # Apply dropout to feed-forward output
             ff_output = self.dropout(ff_output)
-            print(f"DEBUG: After ff dropout - ff_output stats: min={ff_output.min().item():.4f}, max={ff_output.max().item():.4f}, mean={ff_output.mean().item():.4f}")
             
             # Apply sublayer norm with residual connection
             hidden_states = self.feed_forward_norm(ff_output, residual)
-            print(f"DEBUG: After feed_forward_norm - hidden_states stats: min={hidden_states.min().item():.4f}, max={hidden_states.max().item():.4f}, mean={hidden_states.mean().item():.4f}")
             
             if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                 print(f"ERROR: NaN/Inf detected in final hidden_states!")
-                print(f"ERROR: NaN count: {torch.isnan(hidden_states).sum().item()}")
-                print(f"ERROR: Inf count: {torch.isinf(hidden_states).sum().item()}")
             
             # Collect quantization information if requested
             if return_quantization_info:
