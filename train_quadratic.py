@@ -280,7 +280,7 @@ class QuadraticScheduleLayerSkipping(nn.Module):
             skip_mask = torch.zeros(hidden_states.shape[0], device=hidden_states.device, dtype=torch.bool)
         
         # Apply layer function to non-skipped samples
-        if skip_mask.any():
+        if skip_mask.any().item():
             # Process non-skipped samples
             non_skipped = hidden_states[~skip_mask]
             if non_skipped.shape[0] > 0:

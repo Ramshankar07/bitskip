@@ -325,7 +325,7 @@ def ternary_quantize(weights: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]
         mask = abs_weights > threshold
         quantized = torch.zeros_like(weights)
         quantized[mask] = torch.sign(weights[mask])
-        scale = torch.mean(abs_weights[mask]) if mask.any() else torch.tensor(1.0)
+        scale = torch.mean(abs_weights[mask]) if mask.any().item() else torch.tensor(1.0)
         return quantized, scale
 
 def bitnet_linear(

@@ -166,7 +166,7 @@ class LayerSkipping(nn.Module):
         else:
             skip_mask = torch.zeros(batch_size, dtype=torch.bool, device=hidden_states.device)
         
-        if skip_mask.any() and self.training:
+        if skip_mask.any().item() and self.training:
             # Process only non-skipped samples
             non_skip_indices = (~skip_mask).nonzero(as_tuple=True)[0]
             

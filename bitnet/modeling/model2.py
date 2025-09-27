@@ -626,7 +626,7 @@ class BitNetModel2(nn.Module):
                     # Sample whether to accept
                     accept = torch.rand_like(accept_prob) < accept_prob
                     
-                    if accept.any():
+                    if accept.any().item():
                         # Accept token
                         accepted_tokens.append(draft_tokens[i])
                     else:
@@ -642,7 +642,7 @@ class BitNetModel2(nn.Module):
                     attention_mask = torch.ones_like(generated)
             
             # Check for EOS token
-            if (generated == eos_token_id).any():
+            if (generated == eos_token_id).any().item():
                 logger.info("EOS token generated, stopping")
                 break
         

@@ -592,7 +592,7 @@ def main():
                     loss = outputs.loss
             
             # Check for NaN loss
-            if torch.isnan(loss) or torch.isinf(loss):
+            if torch.isnan(loss).any() or torch.isinf(loss).any():
                 logger.warning(f"NaN/Inf loss detected at step {global_step}, skipping this step")
                 optimizer.zero_grad()
                 continue

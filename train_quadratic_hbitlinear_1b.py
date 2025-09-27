@@ -613,7 +613,7 @@ def main():
                 scaler.unscale_(optimizer)
                 
                 
-                if torch.isfinite(scaler.scale):
+                if torch.isfinite(scaler.scale.item()):
                     
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 

@@ -207,7 +207,7 @@ class BitNetInferenceEngine:
                                 layer_logits = self.model.lm_head(hidden[:, -1, :])
                                 probs = torch.softmax(layer_logits, dim=-1)
                                 layer_max_prob, _ = torch.max(probs, dim=-1)
-                                if early_exit_threshold is not None and (layer_max_prob > early_exit_threshold).any():
+                                if early_exit_threshold is not None and (layer_max_prob > early_exit_threshold).any().item():
                                     logits = layer_logits
                                     max_prob = layer_max_prob
                                     if debug:
@@ -229,7 +229,7 @@ class BitNetInferenceEngine:
                             sorted_logits, sorted_indices = torch.sort(logits, descending=True)
                             cumulative_probs = torch.cumsum(torch.softmax(sorted_logits / temperature, dim=-1), dim=-1)
                             sorted_indices_to_remove = cumulative_probs > top_p
-                            if sorted_indices_to_remove[..., 1:].any():
+                            if sorted_indices_to_remove[..., 1:].any().item():
                                 sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
                                 sorted_indices_to_remove[..., 0] = 0
                             
