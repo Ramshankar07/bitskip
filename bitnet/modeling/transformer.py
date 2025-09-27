@@ -9,7 +9,7 @@ import torch.nn as nn
 from transformers.modeling_outputs import BaseModelOutput
 
 from ..utils.default_config import DefaultConfig
-from .attention import BitNetAttention
+from .gqa_attention import BitNetGQA
 from .feed_forward import BitFeedForward
 from .layer_skipping import LayerSkipping
 from .subln import SublayerNormWithResidual
@@ -29,10 +29,11 @@ class BitTransformerBlock(nn.Module):
         self.config = config
         self.activation_bits = config.activation_bits  # Get from config
         
-        # Self-attention with SublayerNorm
-        self.self_attn = BitNetAttention(
+        # Self-attention with SublayerNorm using GQA
+        self.self_attn = BitNetGQA(
             hidden_size=config.hidden_size,
             num_heads=config.num_attention_heads,
+            num_kv_heads=config.num_kv_heads,
             dropout=config.attention_probs_dropout_prob,
             activation_bits=self.activation_bits  # Pass activation bits
         )

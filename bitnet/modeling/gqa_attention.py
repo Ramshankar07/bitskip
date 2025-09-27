@@ -129,7 +129,7 @@ class BitNetGQA(nn.Module):
         assert k.shape == (batch_size, num_heads, seq_len_k, head_dim)
         assert v.shape == (batch_size, num_heads, seq_len_v, head_dim)
         
-        if bitnet_kernels.is_available:
+        if bitnet_kernels is not None and bitnet_kernels.is_available:
             # Use CUDA kernel for attention computation
             attn_scores = attention_scores_cuda(q, k, self.scale)
             
