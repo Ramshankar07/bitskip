@@ -134,8 +134,8 @@ class BitNetAttention(nn.Module):
             
             if torch.isnan(attn_scores).any() or torch.isinf(attn_scores).any():
                 print(f"ERROR: NaN/Inf detected in attn_scores after CUDA kernel!")
-                print(f"ERROR: NaN count: {torch.isnan(attn_scores).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(attn_scores).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(attn_scores).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_scores).sum().item()}")
             
             if attention_mask is not None:
                 # Prepare attention mask for CUDA kernel
@@ -151,8 +151,8 @@ class BitNetAttention(nn.Module):
             
             if torch.isnan(attn_weights).any() or torch.isinf(attn_weights).any():
                 print(f"ERROR: NaN/Inf detected in attn_weights after softmax!")
-                print(f"ERROR: NaN count: {torch.isnan(attn_weights).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(attn_weights).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(attn_weights).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_weights).sum().item()}")
             
             attn_weights = self.dropout(attn_weights)
             print(f"DEBUG: After dropout - attn_weights stats: min={attn_weights.min().item():.4f}, max={attn_weights.max().item():.4f}, mean={attn_weights.mean().item():.4f}")
@@ -164,8 +164,8 @@ class BitNetAttention(nn.Module):
             
             if torch.isnan(result).any() or torch.isinf(result).any():
                 print(f"ERROR: NaN/Inf detected in result after attention_output_cuda!")
-                print(f"ERROR: NaN count: {torch.isnan(result).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(result).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(result).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(result).sum().item()}")
             
             return result
         else:
@@ -180,21 +180,21 @@ class BitNetAttention(nn.Module):
             # attn_scores shape: (batch_size, num_heads, seq_len_q, seq_len_k)
             
             # Check for extreme values before matmul
-            print(f"DEBUG: Q max abs: {q.abs().max():.4f}, K max abs: {k.abs().max():.4f}")
-            print(f"DEBUG: Q std: {q.std():.4f}, K std: {k.std():.4f}")
+            print(f"DEBUG: Q max abs: {q.abs().max().item():.4f}, K max abs: {k.abs().max().item():.4f}")
+            print(f"DEBUG: Q std: {q.std().item():.4f}, K std: {k.std().item():.4f}")
             print(f"DEBUG: head_dim: {self.head_dim}, scale: {self.scale:.6f}")
             
             # Check if values are too large
             if q.abs().max() > 1000 or k.abs().max() > 1000:
-                print(f"WARNING: Very large Q/K values detected! Q max: {q.abs().max():.4f}, K max: {k.abs().max():.4f}")
+                print(f"WARNING: Very large Q/K values detected! Q max: {q.abs().max().item():.4f}, K max: {k.abs().max().item():.4f}")
             
             attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
             print(f"DEBUG: After matmul - attn_scores stats: min={attn_scores.min().item():.4f}, max={attn_scores.max().item():.4f}, mean={attn_scores.mean().item():.4f}")
             
             if torch.isnan(attn_scores).any() or torch.isinf(attn_scores).any():
                 print(f"ERROR: NaN/Inf detected in attn_scores after matmul!")
-                print(f"ERROR: NaN count: {torch.isnan(attn_scores).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(attn_scores).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(attn_scores).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_scores).sum().item()}")
             
             # Verify attention scores shape
             expected_scores_shape = (batch_size, num_heads, seq_len_q, seq_len_k)
@@ -231,8 +231,8 @@ class BitNetAttention(nn.Module):
             
             if torch.isnan(attn_weights).any() or torch.isinf(attn_weights).any():
                 print(f"ERROR: NaN/Inf detected in attn_weights after softmax (CPU)!")
-                print(f"ERROR: NaN count: {torch.isnan(attn_weights).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(attn_weights).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(attn_weights).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_weights).sum().item()}")
             
             attn_weights = self.dropout(attn_weights)
             print(f"DEBUG: After dropout (CPU) - attn_weights stats: min={attn_weights.min().item():.4f}, max={attn_weights.max().item():.4f}, mean={attn_weights.mean().item():.4f}")
@@ -252,8 +252,8 @@ class BitNetAttention(nn.Module):
             
             if torch.isnan(attn_output).any() or torch.isinf(attn_output).any():
                 print(f"ERROR: NaN/Inf detected in attn_output after final matmul (CPU)!")
-                print(f"ERROR: NaN count: {torch.isnan(attn_output).sum()}")
-                print(f"ERROR: Inf count: {torch.isinf(attn_output).sum()}")
+                print(f"ERROR: NaN count: {torch.isnan(attn_output).sum().item()}")
+                print(f"ERROR: Inf count: {torch.isinf(attn_output).sum().item()}")
             
             # Verify output shape
             expected_output_shape = (batch_size, num_heads, seq_len_q, head_dim)
@@ -292,8 +292,8 @@ class BitNetAttention(nn.Module):
         
         if torch.isnan(normed).any() or torch.isinf(normed).any():
             print(f"ERROR: NaN/Inf detected in normed!")
-            print(f"ERROR: NaN count: {torch.isnan(normed).sum()}")
-            print(f"ERROR: Inf count: {torch.isinf(normed).sum()}")
+            print(f"ERROR: NaN count: {torch.isnan(normed).sum().item()}")
+            print(f"ERROR: Inf count: {torch.isinf(normed).sum().item()}")
         
         # Assert normalized shape
         assert normed.shape == (batch_size, seq_length, self.hidden_size), f"Normed shape mismatch: {normed.shape} vs ({batch_size}, {seq_length}, {self.hidden_size})"
@@ -305,24 +305,24 @@ class BitNetAttention(nn.Module):
         
         if torch.isnan(q).any() or torch.isinf(q).any():
             print(f"ERROR: NaN/Inf detected in q!")
-            print(f"ERROR: NaN count: {torch.isnan(q).sum()}")
-            print(f"ERROR: Inf count: {torch.isinf(q).sum()}")
+            print(f"ERROR: NaN count: {torch.isnan(q).sum().item()}")
+            print(f"ERROR: Inf count: {torch.isinf(q).sum().item()}")
         
         k = self.k_proj(normed)
         print(f"DEBUG: After k_proj - k stats: min={k.min().item():.4f}, max={k.max().item():.4f}, mean={k.mean().item():.4f}")
         
         if torch.isnan(k).any() or torch.isinf(k).any():
             print(f"ERROR: NaN/Inf detected in k!")
-            print(f"ERROR: NaN count: {torch.isnan(k).sum()}")
-            print(f"ERROR: Inf count: {torch.isinf(k).sum()}")
+            print(f"ERROR: NaN count: {torch.isnan(k).sum().item()}")
+            print(f"ERROR: Inf count: {torch.isinf(k).sum().item()}")
         
         v = self.v_proj(normed)
         print(f"DEBUG: After v_proj - v stats: min={v.min().item():.4f}, max={v.max().item():.4f}, mean={v.mean().item():.4f}")
         
         if torch.isnan(v).any() or torch.isinf(v).any():
             print(f"ERROR: NaN/Inf detected in v!")
-            print(f"ERROR: NaN count: {torch.isnan(v).sum()}")
-            print(f"ERROR: Inf count: {torch.isinf(v).sum()}")
+            print(f"ERROR: NaN count: {torch.isnan(v).sum().item()}")
+            print(f"ERROR: Inf count: {torch.isinf(v).sum().item()}")
         # Assert projection shapes
         assert q.shape == (batch_size, seq_length, self.hidden_size), f"Q projection shape mismatch: {q.shape}"
         assert k.shape == (batch_size, seq_length, self.hidden_size), f"K projection shape mismatch: {k.shape}"
@@ -349,16 +349,16 @@ class BitNetAttention(nn.Module):
         
         if torch.isnan(q).any() or torch.isinf(q).any():
             print(f"ERROR: NaN/Inf detected in q after RoPE!")
-            print(f"ERROR: NaN count: {torch.isnan(q).sum()}")
-            print(f"ERROR: Inf count: {torch.isinf(q).sum()}")
+            print(f"ERROR: NaN count: {torch.isnan(q).sum().item()}")
+            print(f"ERROR: Inf count: {torch.isinf(q).sum().item()}")
         
         k = self.rotary_emb(k, seq_len=seq_length, position_ids=rotary_pos)
         print(f"DEBUG: After RoPE k - k stats: min={k.min().item():.4f}, max={k.max().item():.4f}, mean={k.mean().item():.4f}")
         
         if torch.isnan(k).any() or torch.isinf(k).any():
             print(f"ERROR: NaN/Inf detected in k after RoPE!")
-            print(f"ERROR: NaN count: {torch.isnan(k).sum()}")
-            print(f"ERROR: Inf count: {torch.isinf(k).sum()}")
+            print(f"ERROR: NaN count: {torch.isnan(k).sum().item()}")
+            print(f"ERROR: Inf count: {torch.isinf(k).sum().item()}")
         
         # Verify shapes after RoPE
         assert q.shape == (batch_size, self.num_heads, seq_length, self.head_dim), f"Q shape after RoPE mismatch: {q.shape}"
@@ -382,8 +382,8 @@ class BitNetAttention(nn.Module):
         
         if torch.isnan(attn_output).any() or torch.isinf(attn_output).any():
             print(f"ERROR: NaN/Inf detected in attn_output!")
-            print(f"ERROR: NaN count: {torch.isnan(attn_output).sum()}")
-            print(f"ERROR: Inf count: {torch.isinf(attn_output).sum()}")
+            print(f"ERROR: NaN count: {torch.isnan(attn_output).sum().item()}")
+            print(f"ERROR: Inf count: {torch.isinf(attn_output).sum().item()}")
         
         # Verify attention output shape
         assert attn_output.shape == (batch_size, self.num_heads, seq_length, self.head_dim), f"Attention output shape mismatch: {attn_output.shape}"
