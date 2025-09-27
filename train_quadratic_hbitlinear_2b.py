@@ -595,15 +595,25 @@ def main():
             }
             
             # Forward pass with FP16 autocast
-            try:
-                with autocast('cuda'):
-                    outputs = model(**tensor_inputs)
-                    loss = outputs.loss
-            except TypeError:
-                # Fallback for older PyTorch versions
-                with torch.autocast(device_type="cuda"):
-                    outputs = model(**tensor_inputs)
-                    loss = outputs.loss
+            # Forward pass without labels to avoid boolean tensor errors
+            model_inputs_no_labels = {k: v for k, v in tensor_inputs.items() if k != 'labels'}
+            with torch.autocast(device_type="cuda"):
+                outputs = model(**model_inputs_no_labels)
+                
+                # Compute loss manually
+                if 'labels' in tensor_inputs:
+                    logits = outputs.logits
+                    labels = tensor_inputs['labels']
+                    shift_logits = logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
+                    loss = F.cross_entropy(
+                        shift_logits.view(-1, shift_logits.size(-1)),
+                        shift_labels.view(-1),
+                        ignore_index=-100,
+                        reduction='mean'
+                    )
+                else:
+                    loss = outputs.loss if hasattr(outputs, 'loss') and outputs.loss is not None else torch.tensor(0.0)
             
             # Check for NaN loss
             if torch.isnan(loss).any() or torch.isinf(loss).any():
