@@ -333,26 +333,43 @@ class BitNetModel(nn.Module):
             Model outputs
         """
         with torch.autograd.profiler.record_function("BitNetModel.forward"):
+            print(f"DEBUG: Starting BitNetModel.forward with input_ids.shape={input_ids.shape}")
+            
             # Validate inputs
+            print(f"DEBUG: Validating input_ids")
             validate_tensor(input_ids, "input_ids", expected_dtype=torch.long)
+            print(f"DEBUG: input_ids validation passed")
+            
             if attention_mask is not None:
+                print(f"DEBUG: Validating attention_mask")
                 validate_tensor(attention_mask, "attention_mask", expected_shape=input_ids.shape)
+                print(f"DEBUG: attention_mask validation passed")
             if position_ids is not None:
+                print(f"DEBUG: Validating position_ids")
                 validate_tensor(position_ids, "position_ids", expected_shape=input_ids.shape, expected_dtype=torch.long)
+                print(f"DEBUG: position_ids validation passed")
             if labels is not None:
+                print(f"DEBUG: Validating labels")
                 validate_tensor(labels, "labels", expected_shape=input_ids.shape, expected_dtype=torch.long)
+                print(f"DEBUG: labels validation passed")
             
             # Get sequence length
+            print(f"DEBUG: Getting sequence length")
             batch_size, seq_length = input_ids.shape
+            print(f"DEBUG: batch_size={batch_size}, seq_length={seq_length}")
 
             # Defensive check: ensure sequence length does not exceed max_position_embeddings
+            print(f"DEBUG: Checking sequence length against max_position_embeddings")
             if seq_length > self.config.max_position_embeddings:
                 raise ValueError(f"Input sequence length {seq_length} exceeds model's max_position_embeddings {self.config.max_position_embeddings}. Reduce your input length or retrain the model.")
+            print(f"DEBUG: Sequence length check passed")
             
             # Generate position IDs if not provided
+            print(f"DEBUG: Generating position IDs")
             if position_ids is None:
                 position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
                 position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
+            print(f"DEBUG: Position IDs generated")
             
             # Get embeddings
             inputs_embeds = self.embed_tokens(input_ids)
