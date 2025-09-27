@@ -51,18 +51,12 @@ def compute_early_exit_loss_per_layer(
 ) -> Optional[torch.Tensor]:
     """Compute early exit loss for samples that didn't skip this layer."""
     
-    print(f"DEBUG: compute_early_exit_loss_per_layer - layer {layer_idx}")
-    print(f"DEBUG: curriculum_mask[{layer_idx}]: {curriculum_mask[layer_idx]}")
-    
     if not curriculum_mask[layer_idx].item():
-        print(f"DEBUG: Layer {layer_idx} not in curriculum, returning None")
         return None
         
     # Only compute loss for non-skipped samples
     active_mask = ~skip_mask
-    print(f"DEBUG: skip_mask: {skip_mask}, active_mask: {active_mask}")
     if not active_mask.any().item():
-        print(f"DEBUG: No active samples for layer {layer_idx}, returning None")
         return None
         
     # Get logits for active samples
@@ -107,8 +101,6 @@ def compute_early_exit_loss(
     Returns:
         Scaled early exit loss
     """
-    print(f"DEBUG: compute_early_exit_loss - {len(hidden_states_list)} layers, iteration={iteration}")
-    
     L = len(hidden_states_list)
     # Cumulative quadratic weights
     weights = [sum(k+1 for k in range(l+1)) for l in range(L)]
@@ -333,85 +325,52 @@ class BitNetModel(nn.Module):
             Model outputs
         """
         with torch.autograd.profiler.record_function("BitNetModel.forward"):
-            print(f"DEBUG: Starting BitNetModel.forward with input_ids.shape={input_ids.shape}")
-            
             # Validate inputs
-            print(f"DEBUG: Validating input_ids")
             validate_tensor(input_ids, "input_ids", expected_dtype=torch.long)
-            print(f"DEBUG: input_ids validation passed")
             
             if attention_mask is not None:
-                print(f"DEBUG: Validating attention_mask")
                 validate_tensor(attention_mask, "attention_mask", expected_shape=input_ids.shape)
-                print(f"DEBUG: attention_mask validation passed")
             if position_ids is not None:
-                print(f"DEBUG: Validating position_ids")
                 validate_tensor(position_ids, "position_ids", expected_shape=input_ids.shape, expected_dtype=torch.long)
-                print(f"DEBUG: position_ids validation passed")
             if labels is not None:
-                print(f"DEBUG: Validating labels")
                 validate_tensor(labels, "labels", expected_shape=input_ids.shape, expected_dtype=torch.long)
-                print(f"DEBUG: labels validation passed")
             
             # Get sequence length
-            print(f"DEBUG: Getting sequence length")
             batch_size, seq_length = input_ids.shape
-            print(f"DEBUG: batch_size={batch_size}, seq_length={seq_length}")
 
             # Defensive check: ensure sequence length does not exceed max_position_embeddings
-            print(f"DEBUG: Checking sequence length against max_position_embeddings")
             if seq_length > self.config.max_position_embeddings:
                 raise ValueError(f"Input sequence length {seq_length} exceeds model's max_position_embeddings {self.config.max_position_embeddings}. Reduce your input length or retrain the model.")
-            print(f"DEBUG: Sequence length check passed")
             
             # Generate position IDs if not provided
-            print(f"DEBUG: Generating position IDs")
             if position_ids is None:
                 position_ids = torch.arange(seq_length, dtype=torch.long, device=input_ids.device)
                 position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
-            print(f"DEBUG: Position IDs generated")
             
             # Get embeddings
-            print(f"DEBUG: Getting token embeddings")
             inputs_embeds = self.embed_tokens(input_ids)
-            print(f"DEBUG: Token embeddings obtained")
-            
-            print(f"DEBUG: Getting position embeddings")
             position_embeddings = self.embed_positions(position_ids)
-            print(f"DEBUG: Position embeddings obtained")
             
-            print(f"DEBUG: Computing hidden states")
             hidden_states = inputs_embeds + position_embeddings
-            print(f"DEBUG: Hidden states computed")
             
-            print(f"DEBUG: Checking for NaN/Inf in hidden states")
             if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                 print(f"ERROR: NaN/Inf detected in hidden_states after embeddings!")
-            print(f"DEBUG: NaN/Inf check passed")
             
             # Initialize layer outputs
-            print(f"DEBUG: Initializing layer outputs")
             all_hidden_states = []  # Always collect for early exit loss
             early_exit_losses = []
-            print(f"DEBUG: Layer outputs initialized")
             
             # Process each layer
-            print(f"DEBUG: Starting layer processing loop")
             for layer_idx in range(self.config.num_hidden_layers):
-                print(f"DEBUG: Processing layer {layer_idx}")
                 if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                     print(f"ERROR: NaN/Inf detected in hidden_states before layer {layer_idx}!")
                     break
                 
                 # Get layer function
-                print(f"DEBUG: Getting layer function for layer {layer_idx}")
                 layer_fn = self._get_layer_fn(layer_idx)
-                print(f"DEBUG: Layer function obtained for layer {layer_idx}")
                 
                 # Apply layer skipping only if enabled
-                print(f"DEBUG: Checking layer skipping for layer {layer_idx}")
-                if self.config.use_layer_skipping:
-                    print(f"DEBUG: Layer skipping enabled, applying to layer {layer_idx}")
+                if bool(self.config.use_layer_skipping):
                     hidden_states, skip_mask = self.layer_skipping(
                         hidden_states=hidden_states,
                         layer_idx=layer_idx,
@@ -453,7 +412,7 @@ class BitNetModel(nn.Module):
                     all_hidden_states.append(hidden_states)
                 
                 # Compute early exit loss if not skipped and early exit is enabled
-                if self.training and self.config.use_early_exit:
+                if self.training and bool(self.config.use_early_exit):
                     
                     with torch.autograd.profiler.record_function("EarlyExitLoss"):
                         layer_loss = compute_early_exit_loss_per_layer(
@@ -494,7 +453,7 @@ class BitNetModel(nn.Module):
                     print(f"ERROR: NaN/Inf detected in main loss!")
                 
                 # Add early exit losses if any and early exit is enabled
-                if self.training and early_exit_losses and self.config.use_early_exit:
+                if self.training and early_exit_losses and bool(self.config.use_early_exit):
                     early_exit_loss = compute_early_exit_loss(
                         all_hidden_states, # Pass all hidden states for loss computation
                         labels,
