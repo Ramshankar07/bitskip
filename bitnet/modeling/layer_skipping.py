@@ -125,7 +125,7 @@ class LayerSkipping(nn.Module):
                     skip_decisions = layer_skip_decision_cuda(
                         torch.ones(batch_size, device='cuda'),
                         prob,
-                        self.training
+                        bool(self.training)  # FIX: Ensure boolean
                     )
                     skip_masks[:, i] = (skip_decisions > 0).bool()
         else:
@@ -133,7 +133,7 @@ class LayerSkipping(nn.Module):
             skip_masks = torch.ones((batch_size, self.num_layers), dtype=torch.bool)
             for i, prob in enumerate(self.dropout_probs):
                 if i < self.num_layers - 1:  # Never skip last layer
-                    skip_masks[:, i] = torch.rand(batch_size) < prob
+                    skip_masks[:, i] = (torch.rand(batch_size) < prob)
         
         return skip_masks
     
@@ -160,12 +160,13 @@ class LayerSkipping(nn.Module):
         batch_size = hidden_states.size(0)
         
         # Generate skip decisions for this layer
-        if bool(self.training) and layer_idx < self.num_layers - 1:  # Never skip last layer
+        if bool(self.training) and layer_idx < self.num_layers - 1:  # FIX: Added bool() and never skip last layer
             skip_prob = self.dropout_probs[layer_idx]
             skip_mask = torch.rand(batch_size, device=hidden_states.device) < skip_prob
         else:
             skip_mask = torch.zeros(batch_size, dtype=torch.bool, device=hidden_states.device)
         
+        # Check if any samples should be skipped - FIX: Added .item() and bool()
         if skip_mask.any().item() and bool(self.training):
             # Process only non-skipped samples
             non_skip_indices = (~skip_mask).nonzero(as_tuple=True)[0]
