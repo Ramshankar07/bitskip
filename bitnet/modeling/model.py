@@ -372,13 +372,22 @@ class BitNetModel(nn.Module):
             print(f"DEBUG: Position IDs generated")
             
             # Get embeddings
+            print(f"DEBUG: Getting token embeddings")
             inputs_embeds = self.embed_tokens(input_ids)
+            print(f"DEBUG: Token embeddings obtained")
+            
+            print(f"DEBUG: Getting position embeddings")
             position_embeddings = self.embed_positions(position_ids)
+            print(f"DEBUG: Position embeddings obtained")
             
+            print(f"DEBUG: Computing hidden states")
             hidden_states = inputs_embeds + position_embeddings
+            print(f"DEBUG: Hidden states computed")
             
+            print(f"DEBUG: Checking for NaN/Inf in hidden states")
             if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
                 print(f"ERROR: NaN/Inf detected in hidden_states after embeddings!")
+            print(f"DEBUG: NaN/Inf check passed")
             
             # Initialize layer outputs
             all_hidden_states = []  # Always collect for early exit loss
