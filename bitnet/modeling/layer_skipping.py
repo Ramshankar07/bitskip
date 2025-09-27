@@ -116,23 +116,11 @@ class LayerSkipping(nn.Module):
         Returns:
             Tensor of shape (batch_size, num_layers) containing skip masks
         """
-        if bitnet_kernels.is_available:
-            # Generate skip decisions for each sample and layer using CUDA
-            skip_masks = torch.ones((batch_size, self.num_layers), dtype=torch.bool, device='cuda')
-            for i, prob in enumerate(self.dropout_probs):
-                if i < self.num_layers - 1:  # Never skip last layer
-                    skip_decisions = layer_skip_decision_cuda(
-                        torch.ones(batch_size, device='cuda'),
-                        prob,
-                        bool(self.training)  # FIX: Ensure boolean
-                    )
-                    skip_masks[:, i] = (skip_decisions > 0).bool()
-        else:
-            # Generate skip decisions on CPU
-            skip_masks = torch.ones((batch_size, self.num_layers), dtype=torch.bool)
-            for i, prob in enumerate(self.dropout_probs):
-                if i < self.num_layers - 1:  # Never skip last layer
-                    skip_masks[:, i] = (torch.rand(batch_size) < prob)
+        # Generate skip decisions using standard PyTorch operations
+        skip_masks = torch.ones((batch_size, self.num_layers), dtype=torch.bool)
+        for i, prob in enumerate(self.dropout_probs):
+            if i < self.num_layers - 1:  # Never skip last layer
+                skip_masks[:, i] = (torch.rand(batch_size) < prob)
         
         return skip_masks
     

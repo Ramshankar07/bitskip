@@ -129,55 +129,38 @@ class BitNetGQA(nn.Module):
         assert k.shape == (batch_size, num_heads, seq_len_k, head_dim)
         assert v.shape == (batch_size, num_heads, seq_len_v, head_dim)
         
-        if bitnet_kernels is not None and bitnet_kernels.is_available:
-            # Use CUDA kernel for attention computation
-            attn_scores = attention_scores_cuda(q, k, self.scale)
+        # Calculate attention scores using standard PyTorch operations
+        # q shape: (batch_size, num_heads, seq_len_q, head_dim)
+        # k shape: (batch_size, num_heads, seq_len_k, head_dim)
+        # attn_scores shape: (batch_size, num_heads, seq_len_q, seq_len_k)
+        attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
+        
+        # Apply attention mask if provided
+        if attention_mask is not None:
+            # Get the key sequence length
+            seq_len_k = k.size(-2)
             
-            if attention_mask is not None:
-                # Prepare attention mask for CUDA kernel
-                if attention_mask.dim() == 2:
-                    attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
-                attn_scores = attn_scores + attention_mask
+            # Ensure attention mask has the right shape
+            if attention_mask.dim() == 2:
+                attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
+            elif attention_mask.dim() == 3:
+                attention_mask = attention_mask.unsqueeze(1)
             
-            # Apply softmax and dropout
-            attn_weights = F.softmax(attn_scores, dim=-1)
-            attn_weights = self.dropout(attn_weights)
+            # Ensure mask matches the key sequence length
+            if attention_mask.size(-1) != seq_len_k:
+                attention_mask = F.pad(attention_mask, (0, seq_len_k - attention_mask.size(-1)), value=1.0)
             
-            # Compute attention output using CUDA kernel
-            return attention_output_cuda(attn_weights, v)
-        else:
-            # Calculate attention scores
-            # q shape: (batch_size, num_heads, seq_len_q, head_dim)
-            # k shape: (batch_size, num_heads, seq_len_k, head_dim)
-            # attn_scores shape: (batch_size, num_heads, seq_len_q, seq_len_k)
-            attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-            
-            # Apply attention mask if provided
-            if attention_mask is not None:
-                # Get the key sequence length
-                seq_len_k = k.size(-2)
-                
-                # Ensure attention mask has the right shape
-                if attention_mask.dim() == 2:
-                    attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
-                elif attention_mask.dim() == 3:
-                    attention_mask = attention_mask.unsqueeze(1)
-                
-                # Ensure mask matches the key sequence length
-                if attention_mask.size(-1) != seq_len_k:
-                    attention_mask = F.pad(attention_mask, (0, seq_len_k - attention_mask.size(-1)), value=1.0)
-                
-                # Apply mask (use large negative value for masked positions)
-                attn_scores = attn_scores + (1.0 - attention_mask) * -10000.0
-            
-            # Apply softmax and dropout
-            attn_weights = F.softmax(attn_scores, dim=-1)
-            attn_weights = self.dropout(attn_weights)
-            
-            # Apply attention to values
-            attn_output = torch.matmul(attn_weights, v)
-            
-            return attn_output
+            # Apply mask (use large negative value for masked positions)
+            attn_scores = attn_scores + (1.0 - attention_mask) * -10000.0
+        
+        # Apply softmax and dropout
+        attn_weights = F.softmax(attn_scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        
+        # Apply attention to values
+        attn_output = torch.matmul(attn_weights, v)
+        
+        return attn_output
     
     def forward(
         self,
