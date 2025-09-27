@@ -278,18 +278,11 @@ class BitNetForCausalLM(nn.Module):
         # Process through transformer layers manually
         all_hidden_states = [] if output_hidden_states else None
         for layer_idx, layer in enumerate(self.model.layers):
-            try:
-                print(f"DEBUG: Processing layer {layer_idx}")
-                layer_outputs = layer(
-                    hidden_states,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids
-                )
-                print(f"DEBUG: Layer {layer_idx} completed successfully")
-            except Exception as e:
-                print(f"DEBUG: Error in layer {layer_idx}: {e}")
-                print(f"DEBUG: Error type: {type(e)}")
-                raise e
+            layer_outputs = layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids
+            )
             
             if isinstance(layer_outputs, tuple):
                 hidden_states = layer_outputs[0]

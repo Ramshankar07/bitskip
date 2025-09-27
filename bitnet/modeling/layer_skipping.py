@@ -127,7 +127,7 @@ class LayerSkipping(nn.Module):
                         prob,
                         self.training
                     )
-                    skip_masks[:, i] = skip_decisions > 0
+                    skip_masks[:, i] = (skip_decisions > 0).bool()
         else:
             # Generate skip decisions on CPU
             skip_masks = torch.ones((batch_size, self.num_layers), dtype=torch.bool)
