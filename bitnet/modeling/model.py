@@ -68,10 +68,7 @@ def compute_early_exit_loss_per_layer(
     # Get logits for active samples
     active_states = hidden_states[active_mask]
     active_targets = target_ids[active_mask]
-    print(f"DEBUG: active_states shape: {active_states.shape}, active_targets shape: {active_targets.shape}")
-    
     logits = lm_head(active_states)
-    print(f"DEBUG: Early exit logits shape: {logits.shape}, stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, mean={logits.mean().item():.4f}")
     
     if torch.isnan(logits).any() or torch.isinf(logits).any():
         print(f"ERROR: NaN/Inf detected in early exit logits for layer {layer_idx}!")
@@ -82,8 +79,6 @@ def compute_early_exit_loss_per_layer(
         active_targets.view(-1),
         reduction='mean'
     )
-    
-    print(f"DEBUG: Early exit loss for layer {layer_idx}: {loss:.4f}")
     
     if torch.isnan(loss) or torch.isinf(loss):
         print(f"ERROR: NaN/Inf detected in early exit loss for layer {layer_idx}!")
@@ -119,35 +114,25 @@ def compute_early_exit_loss(
     weights = [sum(k+1 for k in range(l+1)) for l in range(L)]
     weight_sum = sum(weights)
     normalized_weights = [w/weight_sum for w in weights]
-    print(f"DEBUG: Weights: {weights}, normalized: {[f'{w:.4f}' for w in normalized_weights]}")
-    
     total_loss = 0.0
     for l, hidden_states in enumerate(hidden_states_list):
-        print(f"DEBUG: Processing layer {l}, curriculum_fn result: {curriculum_fn(l, iteration)}")
         if curriculum_fn(l, iteration):
-            print(f"DEBUG: Computing loss for layer {l}")
-            print(f"DEBUG: hidden_states shape: {hidden_states.shape}, targets shape: {targets.shape}")
-            
             logits = lm_head(hidden_states)
-            print(f"DEBUG: Early exit logits shape: {logits.shape}, stats: min={logits.min().item():.4f}, max={logits.max().item():.4f}, mean={logits.mean().item():.4f}")
             
             if torch.isnan(logits).any() or torch.isinf(logits).any():
                 print(f"ERROR: NaN/Inf detected in early exit logits for layer {l}!")
                 continue
             
             layer_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
-            print(f"DEBUG: Layer {l} loss: {layer_loss:.4f}, weight: {normalized_weights[l]:.4f}")
             
             if torch.isnan(layer_loss) or torch.isinf(layer_loss):
                 print(f"ERROR: NaN/Inf detected in early exit loss for layer {l}!")
                 continue
             
             weighted_loss = normalized_weights[l] * layer_loss
-            print(f"DEBUG: Layer {l} weighted loss: {weighted_loss:.4f}")
             total_loss += weighted_loss
     
     final_loss = total_loss * escale
-    print(f"DEBUG: Final early exit loss: {final_loss:.4f} (total={total_loss:.4f}, escale={escale})")
     
     if torch.isnan(final_loss) or torch.isinf(final_loss):
         print(f"ERROR: NaN/Inf detected in final early exit loss!")
