@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BitNet 1B Parameter Training Script - Built from working minimal version
+BitNet 1B Parameter Training Script - Using Original BitNet Model
 Uses Llama 3 tokenizer and FineWeb-Edu streaming dataset
 """
 
@@ -27,124 +27,70 @@ load_dotenv()
 # os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"
 # os.environ["TRANSFORMERS_CACHE"] = "/tmp/hf_cache"
 
+# Import the original BitNet model
+from bitnet.modeling.model import BitNetModel
+from bitnet.utils.default_config import DefaultConfig
 
-class SimplifiedBitNetModel(nn.Module):
+
+class BitNetForCausalLM(nn.Module):
     """
-    Simplified BitNet model that avoids boolean tensor issues.
-    Based on the working minimal implementation.
+    Hugging Face compatible wrapper for the original BitNet model.
+    Uses the fixed BitNetModel from model.py with boolean tensor fixes applied.
     """
     
-    def __init__(self, config):
+    def __init__(self, config_dict):
         super().__init__()
-        self.config = config
         
-        # Extract configuration
-        self.vocab_size = config.get('vocab_size', 128256)
-        self.hidden_size = config.get('hidden_size', 1536)
-        self.num_layers = config.get('num_hidden_layers', 20)
-        self.num_heads = config.get('num_attention_heads', 16)
-        self.max_position_embeddings = config.get('max_position_embeddings', 1024)
-        self.intermediate_size = config.get('intermediate_size', self.hidden_size * 2)
-        self.dropout = config.get('hidden_dropout_prob', 0.1)
+        # Convert config dict to DefaultConfig
+        self.config = self._convert_to_internal_config(config_dict)
         
-        # Embeddings
-        self.token_embeddings = nn.Embedding(self.vocab_size, self.hidden_size)
-        self.position_embeddings = nn.Embedding(self.max_position_embeddings, self.hidden_size)
+        # Create the internal BitNet model
+        self.model = BitNetModel(self.config)
         
-        # Transformer layers
-        self.layers = nn.ModuleList()
-        for _ in range(self.num_layers):
-            self.layers.append(
-                nn.TransformerEncoderLayer(
-                    d_model=self.hidden_size,
-                    nhead=self.num_heads,
-                    dim_feedforward=self.intermediate_size,
-                    dropout=self.dropout,
-                    activation='gelu',
-                    batch_first=True,
-                    norm_first=False
-                )
-            )
-        
-        # Output layers
-        self.layer_norm = nn.LayerNorm(self.hidden_size, eps=1e-5)
-        self.lm_head = nn.Linear(self.hidden_size, self.vocab_size, bias=False)
-        
-        # Initialize weights
-        self.apply(self._init_weights)
-        
-        # Tie embeddings if desired
-        self.lm_head.weight = self.token_embeddings.weight
+        # The model already has lm_head, so we can use it directly
+        self.lm_head = self.model.lm_head
     
-    def _init_weights(self, module):
-        """Initialize weights with small values for stability."""
-        if isinstance(module, (nn.Linear, nn.Embedding)):
-            module.weight.data.normal_(mean=0.0, std=0.02)
-            if isinstance(module, nn.Linear) and module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, nn.LayerNorm):
-            module.weight.data.fill_(1.0)
-            if module.bias is not None:
-                module.bias.data.zero_()
+    def _convert_to_internal_config(self, config_dict):
+        """Convert HF-style config to internal DefaultConfig."""
+        return DefaultConfig(
+            vocab_size=config_dict.get('vocab_size', 128256),
+            hidden_size=config_dict.get('hidden_size', 1536),
+            num_hidden_layers=config_dict.get('num_hidden_layers', 20),
+            num_attention_heads=config_dict.get('num_attention_heads', 16),
+            num_kv_heads=config_dict.get('num_key_value_heads', 4),
+            max_position_embeddings=config_dict.get('max_position_embeddings', 1024),
+            layer_norm_eps=config_dict.get('layer_norm_eps', 1e-5),
+            hidden_dropout_prob=config_dict.get('hidden_dropout_prob', 0.1),
+            attention_probs_dropout_prob=config_dict.get('attention_dropout', 0.1),
+            initializer_range=config_dict.get('initializer_range', 0.02),
+            activation_bits=config_dict.get('activation_bits', 8),
+            weight_bits=config_dict.get('weight_bits', 2),
+            # Force boolean conversion to avoid tensor issues
+            use_layer_skipping=bool(config_dict.get('use_layer_skipping', False)),
+            skip_probability=config_dict.get('skip_probability', 0.0),
+            min_layers_to_keep=config_dict.get('min_layers_to_keep', 1),
+            use_early_exit=bool(config_dict.get('use_early_exit', False)),
+            early_exit_threshold=config_dict.get('early_exit_threshold', 0.0),
+            gradient_checkpointing=bool(config_dict.get('gradient_checkpointing', False))
+        )
     
     def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
         """
-        Forward pass with simplified logic to avoid boolean tensor issues.
+        Forward pass using the original BitNet model.
         """
-        batch_size, seq_len = input_ids.shape
-        device = input_ids.device
+        # Call the internal model
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+            return_dict=True,
+            **kwargs
+        )
         
-        # Get embeddings
-        token_embeds = self.token_embeddings(input_ids)
-        
-        # Create position IDs
-        position_ids = torch.arange(seq_len, dtype=torch.long, device=device)
-        position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
-        position_embeds = self.position_embeddings(position_ids)
-        
-        # Combine embeddings
-        hidden_states = token_embeds + position_embeds
-        
-        # Create proper attention mask for transformer
-        if attention_mask is not None:
-            # Convert from HF format (1 = keep, 0 = mask) to PyTorch format (True = mask)
-            # Also handle the shape properly for encoder layers
-            attention_mask = attention_mask.float()
-            attention_mask = (1.0 - attention_mask) * -10000.0
-            # No need to reshape for src_mask in encoder layers
-        
-        # Apply transformer layers
-        for layer in self.layers:
-            if attention_mask is not None:
-                # For encoder layers, we don't use src_key_padding_mask for simplicity
-                hidden_states = layer(hidden_states)
-        else:
-                hidden_states = layer(hidden_states)
-        
-        # Final layer norm
-        hidden_states = self.layer_norm(hidden_states)
-        
-        # Get logits
-        logits = self.lm_head(hidden_states)
-        
-        # Calculate loss if labels provided
-        loss = None
-        if labels is not None:
-            # Shift for language modeling
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            
-            # Calculate cross entropy loss
-            loss = F.cross_entropy(
-                shift_logits.view(-1, self.vocab_size),
-                shift_labels.view(-1),
-                ignore_index=-100
-            )
-        
-        # Return in simple dict format
+        # Return in simple dict format for compatibility
         return {
-            'loss': loss,
-            'logits': logits
+            'loss': outputs.loss,
+            'logits': outputs.logits
         }
 
 
@@ -298,7 +244,7 @@ def main():
     
     # Setup logging
     logger = setup_logging(args.output_dir)
-    logger.info("Starting BitNet 1B Parameter Training with Llama 3 Tokenizer")
+    logger.info("Starting BitNet 1B Parameter Training with Original BitNet Model")
     logger.info(f"Configuration: {vars(args)}")
     
     # Device setup
@@ -344,12 +290,12 @@ def main():
     # Create or load model
     if args.checkpoint_path and os.path.exists(args.checkpoint_path):
         logger.info(f"Loading checkpoint from {args.checkpoint_path}")
-        model = SimplifiedBitNetModel(config.to_dict())
+        model = BitNetForCausalLM(config.to_dict())
         checkpoint = torch.load(os.path.join(args.checkpoint_path, "model.pt"))
         model.load_state_dict(checkpoint, strict=False)
     else:
-        logger.info("Creating new model")
-        model = SimplifiedBitNetModel(config.to_dict())
+        logger.info("Creating new BitNet model")
+        model = BitNetForCausalLM(config.to_dict())
     
     model.to(device)
     
@@ -445,22 +391,22 @@ def main():
                     accumulated_loss = 0.0
                     
                     # Memory stats
-                if torch.cuda.is_available():
-                    allocated = torch.cuda.memory_allocated() / 1024**3
-                    reserved = torch.cuda.memory_reserved() / 1024**3
-                    logger.info(f"GPU Memory - Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB")
-            
+                    if torch.cuda.is_available():
+                        allocated = torch.cuda.memory_allocated() / 1024**3
+                        reserved = torch.cuda.memory_reserved() / 1024**3
+                        logger.info(f"GPU Memory - Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB")
+                
                 # Save checkpoint
-            if global_step == args.save_steps:
+                if global_step == args.save_steps:
                     checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                     os.makedirs(checkpoint_dir, exist_ok=True)
-                
+                    
                     # Save model
                     torch.save(model.state_dict(), os.path.join(checkpoint_dir, "model.pt"))
-                
+                    
                     # Save config
                     config.save_pretrained(checkpoint_dir)
-            
+                    
                     logger.info(f"Saved checkpoint to {checkpoint_dir}")
             
         except Exception as e:
