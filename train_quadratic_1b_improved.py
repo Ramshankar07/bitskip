@@ -23,13 +23,9 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Disable HuggingFace caching
-os.environ["HF_DATASETS_CACHE"] = "/dev/null"
-os.environ["TRANSFORMERS_CACHE"] = "/dev/null"
-os.environ["HF_HOME"] = "/dev/null"
-os.environ["HF_DATASETS_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["HF_HUB_OFFLINE"] = "1"
+# Configure HuggingFace caching (optional)
+# os.environ["HF_DATASETS_CACHE"] = "/tmp/hf_cache"
+# os.environ["TRANSFORMERS_CACHE"] = "/tmp/hf_cache"
 
 
 class SimplifiedBitNetModel(nn.Module):
@@ -122,7 +118,7 @@ class SimplifiedBitNetModel(nn.Module):
             if attention_mask is not None:
                 # For encoder layers, we don't use src_key_padding_mask for simplicity
                 hidden_states = layer(hidden_states)
-            else:
+        else:
                 hidden_states = layer(hidden_states)
         
         # Final layer norm
@@ -449,22 +445,22 @@ def main():
                     accumulated_loss = 0.0
                     
                     # Memory stats
-                    if torch.cuda.is_available():
-                        allocated = torch.cuda.memory_allocated() / 1024**3
-                        reserved = torch.cuda.memory_reserved() / 1024**3
-                        logger.info(f"GPU Memory - Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB")
-                
+                if torch.cuda.is_available():
+                    allocated = torch.cuda.memory_allocated() / 1024**3
+                    reserved = torch.cuda.memory_reserved() / 1024**3
+                    logger.info(f"GPU Memory - Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB")
+            
                 # Save checkpoint
-                if global_step == args.save_steps:
+            if global_step == args.save_steps:
                     checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                     os.makedirs(checkpoint_dir, exist_ok=True)
-                    
+                
                     # Save model
                     torch.save(model.state_dict(), os.path.join(checkpoint_dir, "model.pt"))
-                    
+                
                     # Save config
                     config.save_pretrained(checkpoint_dir)
-                    
+            
                     logger.info(f"Saved checkpoint to {checkpoint_dir}")
             
         except Exception as e:
@@ -481,7 +477,7 @@ def main():
     # Cleanup
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    
+        
     logger.info("Training completed successfully!")
 
 
