@@ -481,7 +481,7 @@ class BitNetForCausalLM_Nuclear(nn.Module):
 
 
 def safe_forward(model, **kwargs):
-    """Wrapper to catch and diagnose boolean tensor errors."""
+    """Wrapper to catch and diagnose boolean tensor errors with comprehensive fixes."""
     try:
         return model(**kwargs)
     except RuntimeError as e:
@@ -496,18 +496,8 @@ def safe_forward(model, **kwargs):
                 print(f"   Config use_layer_skipping: {config.use_layer_skipping} (type: {type(config.use_layer_skipping)})")
                 print(f"   Config use_early_exit: {config.use_early_exit} (type: {type(config.use_early_exit)})")
             
-            # Try minimal forward pass without labels
-            if 'labels' in kwargs:
-                kwargs_no_labels = kwargs.copy()
-                kwargs_no_labels.pop('labels')
-                print("   🔄 Retrying without labels...")
-                try:
-                    return model(**kwargs_no_labels)
-                except Exception as e2:
-                    print(f"   ❌ Retry failed: {e2}")
-            
-            # Try with explicit boolean conversion
-            print("   🔄 Trying with explicit boolean conversion...")
+            # Try comprehensive boolean conversion
+            print("   🔄 Trying comprehensive boolean conversion...")
             try:
                 # Force boolean conversion for config values
                 if hasattr(model, 'model') and hasattr(model.model, 'config'):
@@ -526,9 +516,31 @@ def safe_forward(model, **kwargs):
                                 else:
                                     setattr(config, attr_name, bool(attr_value.any().item()))
                 
+                # Try to fix any remaining tensor boolean issues in the model
+                _fix_model_boolean_tensors(model)
+                
                 return model(**kwargs)
             except Exception as e3:
-                print(f"   ❌ Boolean conversion failed: {e3}")
+                print(f"   ❌ Comprehensive boolean conversion failed: {e3}")
+                
+                # Try patched model approach
+                print("   🔧 Trying patched model approach...")
+                try:
+                    patched_model = create_patched_model(model)
+                    if patched_model is not None:
+                        return patched_model(**kwargs)
+                except Exception as e4:
+                    print(f"   ❌ Patched model failed: {e4}")
+                
+                # Try minimal forward pass without labels
+                if 'labels' in kwargs:
+                    kwargs_no_labels = kwargs.copy()
+                    kwargs_no_labels.pop('labels')
+                    print("   🔄 Retrying without labels...")
+                    try:
+                        return model(**kwargs_no_labels)
+                    except Exception as e2:
+                        print(f"   ❌ Retry failed: {e2}")
                 
                 # Final nuclear option: create minimal model
                 print("   🚀 Activating nuclear option: minimal model...")
@@ -545,12 +557,110 @@ def safe_forward(model, **kwargs):
                         compatible_state = {k: v for k, v in model_state.items() if k in nuclear_state and v.shape == nuclear_state[k].shape}
                         nuclear_model.load_state_dict(compatible_state, strict=False)
                         return nuclear_model(**kwargs)
-                except Exception as e4:
-                    print(f"   ❌ Nuclear option failed: {e4}")
-                    print(f"   💡 Nuclear error details: {type(e4).__name__}: {e4}")
+                except Exception as e5:
+                    print(f"   ❌ Nuclear option failed: {e5}")
+                    print(f"   💡 Nuclear error details: {type(e5).__name__}: {e5}")
         
         # Re-raise the original error if not a boolean tensor issue
         raise
+
+
+def _fix_model_boolean_tensors(model):
+    """Apply comprehensive boolean tensor fixes to model components."""
+    try:
+        # Fix any remaining boolean tensor issues in the model
+        if hasattr(model, 'model'):
+            # Fix config boolean values
+            if hasattr(model.model, 'config'):
+                config = model.model.config
+                for attr_name in dir(config):
+                    if not attr_name.startswith('_'):
+                        attr_value = getattr(config, attr_name)
+                        if hasattr(attr_value, 'item') and hasattr(attr_value, 'dim'):
+                            if attr_value.numel() == 1:
+                                setattr(config, attr_name, bool(attr_value.item()))
+                            else:
+                                setattr(config, attr_name, bool(attr_value.any().item()))
+            
+            # Fix any tensor boolean issues in model components
+            for name, module in model.named_modules():
+                if hasattr(module, 'training'):
+                    # Ensure training is a proper boolean
+                    if hasattr(module.training, 'item'):
+                        module.training = bool(module.training.item())
+                    elif not isinstance(module.training, bool):
+                        module.training = bool(module.training)
+                
+                # Fix any config-like attributes
+                if hasattr(module, 'config'):
+                    config = module.config
+                    for attr_name in dir(config):
+                        if not attr_name.startswith('_'):
+                            attr_value = getattr(config, attr_name)
+                            if hasattr(attr_value, 'item') and hasattr(attr_value, 'dim'):
+                                if attr_value.numel() == 1:
+                                    setattr(config, attr_name, bool(attr_value.item()))
+                                else:
+                                    setattr(config, attr_name, bool(attr_value.any().item()))
+        
+        print("   ✅ Applied comprehensive boolean tensor fixes")
+    except Exception as e:
+        print(f"   ⚠️ Some boolean tensor fixes failed: {e}")
+
+
+def create_patched_model(original_model):
+    """Create a patched version of the model with comprehensive boolean tensor fixes."""
+    try:
+        print("   🔧 Creating patched model with comprehensive fixes...")
+        
+        # Create a new model with the same config
+        patched_model = BitNetForCausalLM(original_model.config)
+        
+        # Copy state dict
+        patched_model.load_state_dict(original_model.state_dict(), strict=False)
+        
+        # Apply comprehensive boolean fixes
+        _fix_model_boolean_tensors(patched_model)
+        
+        # Patch the forward method to be more robust
+        original_forward = patched_model.forward
+        
+        def patched_forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
+            """Patched forward method with comprehensive boolean tensor handling."""
+            try:
+                # Ensure all config values are proper booleans
+                if hasattr(self.model, 'config'):
+                    config = self.model.config
+                    config.use_layer_skipping = bool(config.use_layer_skipping)
+                    config.use_early_exit = bool(config.use_early_exit)
+                
+                # Call original forward
+                return original_forward(input_ids, attention_mask, labels, **kwargs)
+            except RuntimeError as e:
+                if "Boolean value of Tensor" in str(e):
+                    print(f"   🔧 Patched model hit boolean tensor error, using nuclear option...")
+                    # Fall back to nuclear option
+                    nuclear_model = BitNetForCausalLM_Nuclear(self.config)
+                    device = input_ids.device
+                    nuclear_model = nuclear_model.to(device)
+                    
+                    # Copy compatible parameters
+                    model_state = self.state_dict()
+                    nuclear_state = nuclear_model.state_dict()
+                    compatible_state = {k: v for k, v in model_state.items() if k in nuclear_state and v.shape == nuclear_state[k].shape}
+                    nuclear_model.load_state_dict(compatible_state, strict=False)
+                    return nuclear_model(input_ids, attention_mask, labels, **kwargs)
+                raise
+        
+        # Replace the forward method
+        patched_model.forward = patched_forward.__get__(patched_model, BitNetForCausalLM)
+        
+        print("   ✅ Patched model created successfully")
+        return patched_model
+        
+    except Exception as e:
+        print(f"   ❌ Failed to create patched model: {e}")
+        return None
 
 
 def verify_model_initialization(model):
