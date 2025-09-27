@@ -54,7 +54,7 @@ def compute_early_exit_loss_per_layer(
         
     # Only compute loss for non-skipped samples
     active_mask = ~skip_mask
-    if not active_mask.any():
+    if not active_mask.any().item():
         return None
         
     # Get logits for active samples

@@ -61,7 +61,7 @@ def compute_early_exit_loss_per_layer(
     # Only compute loss for non-skipped samples
     active_mask = ~skip_mask
     print(f"DEBUG: skip_mask: {skip_mask}, active_mask: {active_mask}")
-    if not active_mask.any():
+    if not active_mask.any().item():
         print(f"DEBUG: No active samples for layer {layer_idx}, returning None")
         return None
         
