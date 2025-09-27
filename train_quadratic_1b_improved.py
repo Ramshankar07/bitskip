@@ -234,12 +234,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def get_cosine_schedule(step, warmup_steps, base_lr):
-    """Get cosine learning rate schedule."""
-    if step < warmup_steps:
-        return base_lr * step / warmup_steps
-    else:
-        return base_lr * 0.5 * (1 + torch.cos(torch.tensor(3.14159 * (step - warmup_steps) / (1000 - warmup_steps))))
 
 
 def main():
@@ -322,12 +316,24 @@ def main():
     if is_random:
         logger.warning("Using random data for testing - this is not ideal for actual training")
     
-    # Optimizer and scheduler
+    # Optimizer and scheduler - Using custom WSD scheduler for BitNet + LayerSkip
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.learning_rate,
         weight_decay=0.01,
         betas=(0.9, 0.98)
+    )
+    
+    # Learning rate scheduler - Using custom WSD scheduler for BitNet + LayerSkip
+    from bitnet.utils.lr_schedule import create_scheduler_for_bitnet_layerskip
+    
+    scheduler = create_scheduler_for_bitnet_layerskip(
+        optimizer=optimizer,
+        total_training_steps=args.num_steps,
+        base_learning_rate=args.learning_rate,
+        warmup_ratio=0.1,  # 10% warmup
+        stable_ratio=0.4,  # 40% stable phase
+        decay_ratio=0.5,   # 50% decay phase
     )
     
     # Gradient scaler for mixed precision
@@ -375,12 +381,25 @@ def main():
             # Update weights
             grad_scaler.step(optimizer)
             grad_scaler.update()
+            
+            # Compute gradient norm for adaptive LR adjustment
+            with torch.no_grad():
+                total_norm = 0.0
+                for p in model.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        total_norm += param_norm.item() ** 2
+                gradient_norm = total_norm ** 0.5
+            
+            # Update scheduler with metrics for adaptive adjustment
+            scheduler.step(metrics={
+                'loss': total_loss,
+                'gradient_norm': gradient_norm,
+            })
             optimizer.zero_grad()
             
-            # Update learning rate
-            current_lr = get_cosine_schedule(step, args.warmup_steps, args.learning_rate)
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = current_lr
+            # Get current learning rate for logging
+            current_lr = scheduler.get_last_lr()[0]
             
             # Logging
             if step % args.logging_steps == 0:

@@ -550,14 +550,17 @@ def main():
         betas=(0.9, 0.98)
     )
     
-    def lr_lambda(step):
-        warmup_steps = 100
-        if step < warmup_steps:
-            return step / warmup_steps
-        else:
-            return 0.5 * (1 + math.cos(math.pi * (step - warmup_steps) / (args.num_steps - warmup_steps)))
+    # Learning rate scheduler - Using custom WSD scheduler for BitNet + LayerSkip
+    from bitnet.utils.lr_schedule import create_scheduler_for_bitnet_layerskip
     
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    scheduler = create_scheduler_for_bitnet_layerskip(
+        optimizer=optimizer,
+        total_training_steps=args.num_steps,
+        base_learning_rate=args.learning_rate,
+        warmup_ratio=0.1,  # 10% warmup
+        stable_ratio=0.4,  # 40% stable phase
+        decay_ratio=0.5,   # 50% decay phase
+    )
     
     train_dataloader = create_streaming_dataloader(
         dataset_name="HuggingFaceFW/fineweb-edu",
@@ -644,7 +647,21 @@ def main():
                                 # Optimizer step with gradient scaling
                         scaler.step(optimizer)
                         scaler.update()
-                        scheduler.step()
+                        
+                        # Compute gradient norm for adaptive LR adjustment
+                        with torch.no_grad():
+                            total_norm = 0.0
+                            for p in model.parameters():
+                                if p.grad is not None:
+                                    param_norm = p.grad.data.norm(2)
+                                    total_norm += param_norm.item() ** 2
+                            gradient_norm = total_norm ** 0.5
+                        
+                        # Update scheduler with metrics for adaptive adjustment
+                        scheduler.step(metrics={
+                            'loss': loss.item(),
+                            'gradient_norm': gradient_norm,
+                        })
                         optimizer.zero_grad()
                     else:
                         logger.warning(f"NaN gradients detected at step {global_step}, skipping optimizer step")
