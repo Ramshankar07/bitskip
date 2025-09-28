@@ -74,7 +74,7 @@ class DefaultConfig:
     # Logging and output
     logging_steps: int = 100
     save_steps: int = 1000
-    eval_steps: int = 1000
+    eval_steps: int = 500
     output_dir: str = "outputs"
     seed: int = 42
     

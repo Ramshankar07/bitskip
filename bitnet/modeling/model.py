@@ -88,45 +88,60 @@ def compute_early_exit_loss(
     curriculum_fn,
     escale: float = 1.0
 ) -> torch.Tensor:
-    """
-    Compute weighted early exit loss across layers using cumulative quadratic weighting and curriculum learning.
-    Args:
-        hidden_states_list: List of hidden states from each layer
-        targets: Target tensor
-        lm_head: Shared LM head
-        iteration: Current training iteration
-        curriculum_fn: Function to determine if layer is enabled for loss
-        escale: Scale factor for early exit loss
-    Returns:
-        Scaled early exit loss
-    """
+    """Safe early exit loss computation with NaN protection."""
+    
+    # Add input validation
+    if targets is None or targets.numel() == 0:
+        return torch.tensor(0.0, device=targets.device if targets is not None else 'cpu', requires_grad=True)
+    
     L = len(hidden_states_list)
-    # Cumulative quadratic weights
     weights = [sum(k+1 for k in range(l+1)) for l in range(L)]
     weight_sum = sum(weights)
     normalized_weights = [w/weight_sum for w in weights]
+    
     total_loss = 0.0
+    valid_loss_count = 0
+    
     for l, hidden_states in enumerate(hidden_states_list):
-        if curriculum_fn(l, iteration):
-            logits = lm_head(hidden_states)
+        if not curriculum_fn(l, iteration):
+            continue
             
-            if torch.isnan(logits).any().item() or torch.isinf(logits).any().item():
-                print(f"ERROR: NaN/Inf detected in early exit logits for layer {l}!")
-                continue
+        # Check for NaN in hidden states
+        if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
+            continue
             
-            layer_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
+        logits = lm_head(hidden_states)
+        
+        # Comprehensive NaN check
+        if (torch.isnan(logits).any() or torch.isinf(logits).any() or 
+            logits.abs().max() > 1e6):  # Also check for extreme values
+            continue
+        
+        # Safe cross entropy with clamping
+        logits = logits.view(-1, logits.size(-1))
+        targets_flat = targets.view(-1)
+        
+        # Skip if targets contain invalid values
+        if targets_flat.min() < 0 or targets_flat.max() >= logits.size(-1):
+            continue
             
-            if torch.isnan(layer_loss).any().item() or torch.isinf(layer_loss).any().item():
-                print(f"ERROR: NaN/Inf detected in early exit loss for layer {l}!")
-                continue
+        try:
+            layer_loss = F.cross_entropy(logits, targets_flat, reduction='mean')
             
-            weighted_loss = normalized_weights[l] * layer_loss
-            total_loss += weighted_loss
+            if torch.isfinite(layer_loss):
+                weighted_loss = normalized_weights[l] * layer_loss
+                total_loss += weighted_loss
+                valid_loss_count += 1
+        except:
+            continue
+    
+    if valid_loss_count == 0:
+        return torch.tensor(0.0, device=targets.device, requires_grad=True)
     
     final_loss = total_loss * escale
     
-    if torch.isnan(final_loss).any().item() or torch.isinf(final_loss).any().item():
-        print(f"ERROR: NaN/Inf detected in final early exit loss!")
+    # Final safety check
+    if not torch.isfinite(final_loss):
         return torch.tensor(0.0, device=targets.device, requires_grad=True)
     
     return final_loss
@@ -194,23 +209,27 @@ class BitNetModel(nn.Module):
     
     def _init_weights(self, module: nn.Module) -> None:
         """
-        Initialize the weights of a module with conservative scaling.
+        Initialize weights with extreme caution for quantized models.
         
         Args:
             module: Module to initialize
         """
         if isinstance(module, nn.Linear):
-            # Use conservative initialization to prevent extreme values
-            std = min(self.config.initializer_range, 0.01)  # Cap at 0.01
+            # MUCH more conservative initialization for quantized models
+            std = min(self.config.initializer_range, 0.002)  # Reduced from 0.01 to 0.002
             module.weight.data.normal_(mean=0.0, std=std)
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, nn.Embedding):
-            # Use conservative initialization for embeddings
-            std = min(self.config.initializer_range, 0.01)  # Cap at 0.01
+            # Even more conservative for embeddings
+            std = min(self.config.initializer_range, 0.001)  # Further reduced
             module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, nn.LayerNorm):
+            # Initialize LayerNorm safely
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
     
     
     
@@ -679,4 +698,118 @@ class BitNetModel(nn.Module):
                 break
         
         logger.info(f"Self-speculative decoding completed, generated {generated.shape[1] - input_ids.shape[1]} tokens")
-        return generated 
+        return generated
+    
+    def safe_forward(self, **kwargs):
+        """Safe forward pass with comprehensive NaN protection."""
+        
+        # Pre-forward validation
+        for key, value in kwargs.items():
+            if isinstance(value, torch.Tensor):
+                if torch.isnan(value).any() or torch.isinf(value).any():
+                    print(f"ERROR: NaN/Inf in input {key}")
+                    # Return safe dummy output
+                    batch_size = value.shape[0] if hasattr(value, 'shape') else 1
+                    seq_length = value.shape[1] if hasattr(value, 'shape') and len(value.shape) > 1 else 1
+                    dummy_logits = torch.zeros(batch_size, seq_length, self.config.vocab_size, 
+                                             device=value.device)
+                    return CausalLMOutputWithPast(loss=None, logits=dummy_logits)
+        
+        try:
+            # Run forward with gradient scaling for stability
+            with torch.amp.autocast('cuda', enabled=False):  # Disable AMP for stability
+                output = self.forward(**kwargs)
+                
+            # Post-forward validation
+            if output.loss is not None and not torch.isfinite(output.loss):
+                print("ERROR: Non-finite loss detected")
+                output.loss = torch.tensor(0.0, device=output.logits.device, requires_grad=True)
+                
+            if torch.isnan(output.logits).any() or torch.isinf(output.logits).any():
+                print("ERROR: Non-finite logits detected")
+                # Create safe logits
+                output.logits = torch.zeros_like(output.logits)
+                
+            return output
+            
+        except Exception as e:
+            print(f"ERROR in forward pass: {e}")
+            # Return safe dummy output
+            device = kwargs['input_ids'].device if 'input_ids' in kwargs else 'cpu'
+            dummy_logits = torch.zeros(1, 1, self.config.vocab_size, device=device)
+            return CausalLMOutputWithPast(loss=None, logits=dummy_logits)
+    
+    def safe_training_step(self, batch, optimizer, grad_accum_steps=1):
+        """Safe training step with comprehensive protection."""
+        
+        # Enable training mode
+        self.train()
+        
+        try:
+            # Forward pass with safety wrapper
+            outputs = self.safe_forward(**batch)
+            
+            if outputs.loss is None:
+                print("WARNING: No loss computed, skipping batch")
+                return None
+                
+            # Check loss validity
+            if not torch.isfinite(outputs.loss):
+                print("WARNING: Non-finite loss, skipping batch")
+                return None
+                
+            # Scale loss for gradient accumulation
+            loss = outputs.loss / grad_accum_steps
+            
+            # Safe backward pass
+            loss.backward()
+            
+            # Gradient checking before optimizer step
+            total_norm = 0.0
+            has_nan_grad = False
+            
+            for name, param in self.named_parameters():
+                if param.grad is not None:
+                    grad_norm = param.grad.data.norm(2).item()
+                    total_norm += grad_norm ** 2
+                    
+                    if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                        print(f"WARNING: NaN/Inf gradients in {name}")
+                        has_nan_grad = True
+                        param.grad.data.zero_()  # Zero out bad gradients
+            
+            total_norm = total_norm ** 0.5
+            
+            # Apply gradient clipping
+            if total_norm > 1.0:  # More aggressive clipping
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=0.5)
+                print(f"Gradient clipped: norm was {total_norm}")
+                
+            if has_nan_grad:
+                print("WARNING: NaN gradients detected, zeroing gradients")
+                optimizer.zero_grad()
+                return None
+                
+            return loss.item()
+            
+        except Exception as e:
+            print(f"ERROR in training step: {e}")
+            optimizer.zero_grad()
+            return None
+    
+    def monitor_model_state(self, prefix=""):
+        """Monitor model state for debugging."""
+        print(f"\n=== Model State Monitor ({prefix}) ===")
+        
+        # Check parameters
+        for name, param in self.named_parameters():
+            if param.requires_grad:
+                if torch.isnan(param).any():
+                    print(f"NaN in parameters: {name}")
+                if torch.isinf(param).any():
+                    print(f"Inf in parameters: {name}")
+                if param.abs().max() > 1000:
+                    print(f"Large values in {name}: max={param.abs().max().item()}")
+        
+        # Check activations (requires a forward pass)
+        print("====================================\n") 

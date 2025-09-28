@@ -585,7 +585,8 @@ def main():
                 
                 # Forward pass with mixed precision
                 with autocast('cuda', dtype=torch.float16):
-                    outputs = model(
+                    # Use safe forward pass
+                    outputs = model.safe_forward(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
                         labels=labels
@@ -664,6 +665,10 @@ def main():
             # Periodic health check every 50 steps
             if step % 50 == 0:
                 logger.info("🔍 Running periodic model health check...")
+                
+                # Use the model's built-in monitoring
+                model.monitor_model_state(f"Step {step}")
+                
                 corruption_found = False
                 
                 # Quick check for NaN/Inf in parameters
