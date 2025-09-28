@@ -91,9 +91,10 @@ class BitTransformerBlock2(nn.Module):
             attn_outputs = self.self_attn(
                 hidden_states,
                 attention_mask=attention_mask,
-                layer_past=layer_past,
+                past_key_value=layer_past,
                 use_cache=use_cache,
                 position_ids=position_ids,
+                cache_position=cache_position
             )
             
             # Handle both cases: with and without cached key-values
