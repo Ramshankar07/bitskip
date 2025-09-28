@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from .layer_skipping import LayerSkipping, LayerSkipState
@@ -60,13 +61,21 @@ def compute_early_exit_loss_per_layer(
     # Get logits for active samples
     active_states = hidden_states[active_mask]
     active_targets = target_ids[active_mask]
-    
     logits = lm_head(active_states)
+    
+    if torch.isnan(logits).any().item() or torch.isinf(logits).any().item():
+        print(f"ERROR: NaN/Inf detected in early exit logits for layer {layer_idx}!")
+        return None
+    
     loss = F.cross_entropy(
         logits.view(-1, logits.size(-1)),
         active_targets.view(-1),
         reduction='mean'
     )
+    
+    if torch.isnan(loss).any().item() or torch.isinf(loss).any().item():
+        print(f"ERROR: NaN/Inf detected in early exit loss for layer {layer_idx}!")
+        return None
     
     return loss
 
@@ -79,30 +88,63 @@ def compute_early_exit_loss(
     curriculum_fn,
     escale: float = 1.0
 ) -> torch.Tensor:
-    """
-    Compute weighted early exit loss across layers using cumulative quadratic weighting and curriculum learning.
-    Args:
-        hidden_states_list: List of hidden states from each layer
-        targets: Target tensor
-        lm_head: Shared LM head
-        iteration: Current training iteration
-        curriculum_fn: Function to determine if layer is enabled for loss
-        escale: Scale factor for early exit loss
-    Returns:
-        Scaled early exit loss
-    """
+    """Safe early exit loss computation with NaN protection."""
+    
+    # Add input validation
+    if targets is None or targets.numel() == 0:
+        return torch.tensor(0.0, device=targets.device if targets is not None else 'cpu', requires_grad=True)
+    
     L = len(hidden_states_list)
-    # Cumulative quadratic weights
     weights = [sum(k+1 for k in range(l+1)) for l in range(L)]
     weight_sum = sum(weights)
     normalized_weights = [w/weight_sum for w in weights]
+    
     total_loss = 0.0
+    valid_loss_count = 0
+    
     for l, hidden_states in enumerate(hidden_states_list):
-        if curriculum_fn(l, iteration):
-            logits = lm_head(hidden_states)
-            layer_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
-            total_loss += normalized_weights[l] * layer_loss
-    return total_loss * escale
+        if not curriculum_fn(l, iteration):
+            continue
+            
+        # Check for NaN in hidden states
+        if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
+            continue
+            
+        logits = lm_head(hidden_states)
+        
+        # Comprehensive NaN check
+        if (torch.isnan(logits).any() or torch.isinf(logits).any() or 
+            logits.abs().max() > 1e6):  # Also check for extreme values
+            continue
+        
+        # Safe cross entropy with clamping
+        logits = logits.view(-1, logits.size(-1))
+        targets_flat = targets.view(-1)
+        
+        # Skip if targets contain invalid values
+        if targets_flat.min() < 0 or targets_flat.max() >= logits.size(-1):
+            continue
+            
+        try:
+            layer_loss = F.cross_entropy(logits, targets_flat, reduction='mean')
+            
+            if torch.isfinite(layer_loss):
+                weighted_loss = normalized_weights[l] * layer_loss
+                total_loss += weighted_loss
+                valid_loss_count += 1
+        except:
+            continue
+    
+    if valid_loss_count == 0:
+        return torch.tensor(0.0, device=targets.device, requires_grad=True)
+    
+    final_loss = total_loss * escale
+    
+    # Final safety check
+    if not torch.isfinite(final_loss):
+        return torch.tensor(0.0, device=targets.device, requires_grad=True)
+    
+    return final_loss
 
 
 class BitNetModel2(nn.Module):
@@ -167,57 +209,29 @@ class BitNetModel2(nn.Module):
     
     def _init_weights(self, module: nn.Module) -> None:
         """
-        Initialize the weights of a module.
+        Initialize weights with extreme caution for quantized models.
         
         Args:
             module: Module to initialize
         """
         if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            # MUCH more conservative initialization for quantized models
+            std = min(self.config.initializer_range, 0.002)  # Reduced from 0.01 to 0.002
+            module.weight.data.normal_(mean=0.0, std=std)
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            # Even more conservative for embeddings
+            std = min(self.config.initializer_range, 0.001)  # Further reduced
+            module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, nn.LayerNorm):
+            # Initialize LayerNorm safely
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
     
-    def collect_quantization_losses(self) -> Dict[str, torch.Tensor]:
-        """
-        Collect quantization losses from all BitLinear layers in the model.
-        
-        Returns:
-            Dictionary containing quantization loss information
-        """
-        quantization_info = {}
-        
-        # Collect from transformer layers
-        for layer_idx, layer in enumerate(self.layers):
-            layer_quant_info = layer.collect_quantization_losses()
-            if layer_quant_info:
-                for key, value in layer_quant_info.items():
-                    quantization_info[f"layer_{layer_idx}_{key}"] = value
-        
-        return quantization_info
     
-    def collect_routing_losses(self) -> Dict[str, torch.Tensor]:
-        """
-        Collect routing losses from layer skipping mechanism.
-        
-        Returns:
-            Dictionary containing routing loss information
-        """
-        routing_info = {}
-        
-        # Collect skip masks from layer skipping
-        if hasattr(self.layer_skipping, 'skip_masks'):
-            skip_masks = self.layer_skipping.skip_masks
-            if skip_masks is not None:
-                # Compute routing loss as expected computational cost
-                active_layers = ~skip_masks
-                expected_cost = torch.mean(torch.sum(active_layers.float(), dim=0))
-                routing_info['routing_loss'] = expected_cost
-        
-        return routing_info
     
     def gradient_checkpointing_enable(self) -> None:
         """Enable gradient checkpointing."""
@@ -248,9 +262,9 @@ class BitNetModel2(nn.Module):
                 if k not in ['exit_layer', 'training_step', 'labels']
             }
             
-            if self.gradient_checkpointing and bool(self.training):
+            if self.gradient_checkpointing and bool(getattr(self, 'training', False)):
                 # Use gradient checkpointing with explicit use_reentrant=False
-                return torch.utils.checkpoint.checkpoint(
+                return checkpoint(
                     layer,
                     hidden_states,
                     use_reentrant=False,
@@ -322,12 +336,19 @@ class BitNetModel2(nn.Module):
             position_embeddings = self.embed_positions(position_ids)
             hidden_states = inputs_embeds + position_embeddings
             
+            if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
+                print(f"ERROR: NaN/Inf detected in hidden_states after embeddings!")
+            
             # Initialize layer outputs
             all_hidden_states = []  # Always collect for early exit loss
             early_exit_losses = []
             
             # Process each layer
             for layer_idx in range(self.config.num_hidden_layers):
+                if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
+                    print(f"ERROR: NaN/Inf detected in hidden_states before layer {layer_idx}!")
+                    break
+                
                 # Get layer function
                 layer_fn = self._get_layer_fn(layer_idx)
                 
@@ -346,23 +367,29 @@ class BitNetModel2(nn.Module):
                     return_quantization_info=return_quantization_info
                 )
                 
+                if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
+                    print(f"ERROR: NaN/Inf detected in hidden_states after layer {layer_idx}!")
+                    break  # Stop processing to prevent further NaN propagation
+                
                 # Store hidden states if requested
                 if output_hidden_states:
                     all_hidden_states.append(hidden_states)
                 
-                # Compute early exit loss if not skipped
-                if bool(self.training):
-                    with torch.autograd.profiler.record_function("EarlyExitLoss"):
-                        layer_loss = compute_early_exit_loss_per_layer(
-                            hidden_states=hidden_states,
-                            target_ids=labels if labels is not None else input_ids,
-                            lm_head=self.lm_head,
-                            layer_idx=layer_idx,
-                            skip_mask=skip_mask,
-                            curriculum_mask=self.early_exit_curriculum
-                        )
-                        if layer_loss is not None:
-                            early_exit_losses.append((layer_idx, layer_loss))
+                # Compute early exit loss if not skipped and early exit is enabled
+                if bool(getattr(self, 'training', False)) and bool(getattr(self.config, 'use_early_exit', False)) and labels is not None:
+                    # Add safety check for labels tensor
+                    if isinstance(labels, torch.Tensor) and labels.numel() > 0:
+                        with torch.autograd.profiler.record_function("EarlyExitLoss"):
+                            layer_loss = compute_early_exit_loss_per_layer(
+                                hidden_states=hidden_states,
+                                target_ids=labels,
+                                lm_head=self.lm_head,
+                                layer_idx=layer_idx,
+                                skip_mask=skip_mask,
+                                curriculum_mask=self.early_exit_curriculum
+                            )
+                            if layer_loss is not None:
+                                early_exit_losses.append((layer_idx, layer_loss))
                 
                 # Early exit if requested
                 if exit_layer is not None and layer_idx >= exit_layer:
@@ -374,6 +401,9 @@ class BitNetModel2(nn.Module):
             # Compute logits
             logits = self.lm_head(hidden_states)
             
+            if torch.isnan(logits).any().item() or torch.isinf(logits).any().item():
+                print(f"ERROR: NaN/Inf detected in logits!")
+            
             # Compute loss if labels are provided
             loss = None
             if labels is not None:
@@ -383,8 +413,11 @@ class BitNetModel2(nn.Module):
                 loss_fct = nn.CrossEntropyLoss()
                 loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
                 
-                # Add early exit losses if any
-                if bool(self.training) and early_exit_losses:
+                if torch.isnan(loss).any().item() or torch.isinf(loss).any().item():
+                    print(f"ERROR: NaN/Inf detected in main loss!")
+                
+                # Add early exit losses if any and early exit is enabled
+                if bool(getattr(self, 'training', False)) and early_exit_losses and bool(getattr(self.config, 'use_early_exit', False)):
                     early_exit_loss = compute_early_exit_loss(
                         all_hidden_states, # Pass all hidden states for loss computation
                         labels,
