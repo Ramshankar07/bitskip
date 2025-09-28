@@ -94,7 +94,6 @@ class BitTransformerBlock2(nn.Module):
                 layer_past=layer_past,
                 use_cache=use_cache,
                 position_ids=position_ids,
-                cache_position=cache_position
             )
             
             # Handle both cases: with and without cached key-values
