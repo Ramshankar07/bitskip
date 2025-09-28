@@ -119,7 +119,7 @@ class BitTransformerBlock(nn.Module):
                 attn_output = attn_outputs
                 present_key_value = None
             
-            if torch.isnan(attn_output).any().item() or torch.isinf(attn_output).any().item():
+            if attn_output is not None and (torch.isnan(attn_output).any().item() or torch.isinf(attn_output).any().item()):
                 print(f"ERROR: NaN/Inf detected in attn_output!")
             
             # Apply dropout to attention output
@@ -128,7 +128,7 @@ class BitTransformerBlock(nn.Module):
             # Apply sublayer norm with residual connection
             hidden_states = self.self_attn_norm(attn_output, residual)
             
-            if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
+            if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
                 print(f"ERROR: NaN/Inf detected in hidden_states after self_attn_norm!")
             
             # Store new residual
@@ -137,7 +137,7 @@ class BitTransformerBlock(nn.Module):
             # Feed forward
             ff_output = self.feed_forward(hidden_states)
             
-            if torch.isnan(ff_output).any().item() or torch.isinf(ff_output).any().item():
+            if ff_output is not None and (torch.isnan(ff_output).any().item() or torch.isinf(ff_output).any().item()):
                 print(f"ERROR: NaN/Inf detected in ff_output!")
             
             # Apply dropout to feed-forward output
@@ -146,7 +146,7 @@ class BitTransformerBlock(nn.Module):
             # Apply sublayer norm with residual connection
             hidden_states = self.feed_forward_norm(ff_output, residual)
             
-            if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
+            if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
                 print(f"ERROR: NaN/Inf detected in final hidden_states!")
             
             
