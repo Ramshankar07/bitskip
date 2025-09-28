@@ -41,14 +41,16 @@ class BitFeedForward2(nn.Module):
         self.up_proj = HBitLinear(
             self.hidden_size,
             self.intermediate_size,
-            bias=False
+            bias=False,
+            activation_bits=self.activation_bits
         )
         
         # H-BitLinear layer for down projection
         self.down_proj = HBitLinear(
             self.intermediate_size,
             self.hidden_size,
-            bias=False
+            bias=False,
+            activation_bits=self.activation_bits
         )
         
         # Dropout
@@ -72,7 +74,7 @@ class BitFeedForward2(nn.Module):
         batch_size, seq_len, hidden_size = input_shape
         
         # Up projection with H-BitLinear
-        hidden_states = self.up_proj(hidden_states, bits=self.activation_bits)
+        hidden_states = self.up_proj(hidden_states)
         # Assert up_proj output shape
         assert hidden_states.shape == (batch_size, seq_len, self.intermediate_size), f"Up projection output shape mismatch: {hidden_states.shape}"
         
@@ -83,7 +85,7 @@ class BitFeedForward2(nn.Module):
         hidden_states = self.dropout(hidden_states)
         
         # Down projection with H-BitLinear
-        hidden_states = self.down_proj(hidden_states, bits=self.activation_bits)
+        hidden_states = self.down_proj(hidden_states)
         
         # Verify output shape matches input shape
         assert hidden_states.shape == input_shape, \

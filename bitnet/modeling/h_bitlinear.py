@@ -57,6 +57,7 @@ class HBitLinear(nn.Module):
         in_features: int,
         out_features: int,
         bias: bool = False,
+        activation_bits: int = 4,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None
     ):
@@ -71,6 +72,7 @@ class HBitLinear(nn.Module):
         factory_kwargs = {'device': device, 'dtype': dtype}
         self.in_features = in_features
         self.out_features = out_features
+        self.activation_bits = activation_bits
 
         # Initialize weights
         self.weight = nn.Parameter(torch.empty((out_features, in_features), **factory_kwargs))
@@ -140,17 +142,15 @@ class HBitLinear(nn.Module):
 
     
 
-    def forward(self, x: torch.Tensor, bits: int = 4, ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
+    def forward(self, x: torch.Tensor) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
         """
         Forward pass with Layer Normalization, Hadamard transformation, and quantization.
         
         Args:
             x: Input tensor
-            bits: Number of bits for activation quantization (default: 4 for H-BitLinear)
-            return_quantization_info: Whether to return quantization loss information
             
         Returns:
-            Output tensor, or (output_tensor, quantization_info) if return_quantization_info=True
+            Output tensor
         """
         # Store original shape for reshaping
         original_shape = x.shape
@@ -164,7 +164,7 @@ class HBitLinear(nn.Module):
         x_ln = self.layer_norm(x)
         
         # Quantize activations before Hadamard transform
-        x_q, x_scale = self._activation_quantize(x_ln, bits)
+        x_q, x_scale = self._activation_quantize(x_ln, self.activation_bits)
         
         # Apply Hadamard transform to quantized input
         x_h = hadamard_transform(x_q)

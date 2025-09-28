@@ -6,6 +6,7 @@ from typing import Optional, Tuple, Union, Dict
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers.modeling_outputs import BaseModelOutput
 
 from ..utils.default_config import DefaultConfig
@@ -50,9 +51,24 @@ class BitTransformerBlock2(nn.Module):
         
         # Dropout
         self.dropout = nn.Dropout(getattr(config, 'hidden_dropout_prob', 0.1))
+        
+        # Routing decision components
+        self.use_routing = getattr(config, 'use_routing', False)
+        self.routing_threshold = getattr(config, 'routing_threshold', 0.5)
+        
+        if self.use_routing:
+            # Routing gate to decide whether to apply attention and/or feed-forward
+            self.attention_router = nn.Linear(config.hidden_size, 1)
+            self.ff_router = nn.Linear(config.hidden_size, 1)
+            
+            # Initialize routing gates
+            nn.init.xavier_uniform_(self.attention_router.weight)
+            nn.init.zeros_(self.attention_router.bias)
+            nn.init.xavier_uniform_(self.ff_router.weight)
+            nn.init.zeros_(self.ff_router.bias)
     
     
-    
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -79,60 +95,79 @@ class BitTransformerBlock2(nn.Module):
             # Store residual for later
             residual = hidden_states
             
-            # Self attention
-            attn_outputs = self.self_attn(
-                hidden_states,
-                attention_mask=attention_mask,
-                past_key_value=layer_past,
-                use_cache=use_cache,
-                position_ids=position_ids,
-            )
+            # Routing decision for attention
+            apply_attention = True
+            if self.use_routing:
+                attention_score = torch.sigmoid(self.attention_router(hidden_states))
+                apply_attention = attention_score.mean() > self.routing_threshold
             
-            
-            
-            # Handle attention outputs
-            if isinstance(attn_outputs, tuple):
-                if len(attn_outputs) == 2:
-                    # When use_cache=True, attention returns (output, cached_keys_values)
-                    attn_output, present_key_value = attn_outputs
+            # Self attention (only if routing decision allows)
+            if apply_attention:
+                attn_outputs = self.self_attn(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    past_key_value=layer_past,
+                    use_cache=use_cache,
+                    position_ids=position_ids,
+                )
+                
+                # Handle attention outputs
+                if isinstance(attn_outputs, tuple):
+                    if len(attn_outputs) == 2:
+                        # When use_cache=True, attention returns (output, cached_keys_values)
+                        attn_output, present_key_value = attn_outputs
+                    else:
+                        # When use_cache=False, attention returns just output
+                        attn_output = attn_outputs[0]
+                        present_key_value = None
                 else:
                     # When use_cache=False, attention returns just output
-                    attn_output = attn_outputs[0]
+                    attn_output = attn_outputs
                     present_key_value = None
+                
+                if torch.isnan(attn_output).any().item() or torch.isinf(attn_output).any().item():
+                    print(f"ERROR: NaN/Inf detected in attn_output!")
+                
+                attn_output = self.dropout(attn_output)
+                hidden_states = self.self_attn_norm(attn_output, residual)
             else:
-                # When use_cache=False, attention returns just output
-                attn_output = attn_outputs
+                # Skip attention, just pass through with residual connection
+                hidden_states = residual
                 present_key_value = None
-            
-            if torch.isnan(attn_output).any().item() or torch.isinf(attn_output).any().item():
-                print(f"ERROR: NaN/Inf detected in attn_output!")
-            
-            attn_output = self.dropout(attn_output)
-            
-            hidden_states = self.self_attn_norm(attn_output, residual)
             
             if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
                 print(f"ERROR: NaN/Inf detected in hidden_states after self_attn_norm!")
             
+            # Store residual for feed-forward
             residual = hidden_states
-            ff_output = self.feed_forward(hidden_states)
             
+            # Routing decision for feed-forward
+            apply_ff = True
+            if self.use_routing:
+                ff_score = torch.sigmoid(self.ff_router(hidden_states))
+                apply_ff = ff_score.mean() > self.routing_threshold
             
-            
-            if torch.isnan(ff_output).any().item() or torch.isinf(ff_output).any().item():
-                print(f"ERROR: NaN/Inf detected in ff_output!")
-            
-            # Apply dropout to feed-forward output
-            ff_output = self.dropout(ff_output)
-            
-            # Apply sublayer norm with residual connection
-            hidden_states = self.feed_forward_norm(ff_output, residual)
+            # Feed-forward (only if routing decision allows)
+            if apply_ff:
+                ff_output = self.feed_forward(hidden_states)
+                
+                if torch.isnan(ff_output).any().item() or torch.isinf(ff_output).any().item():
+                    print(f"ERROR: NaN/Inf detected in ff_output!")
+                
+                # Apply dropout to feed-forward output
+                ff_output = self.dropout(ff_output)
+                
+                # Apply sublayer norm with residual connection
+                hidden_states = self.feed_forward_norm(ff_output, residual)
+            else:
+                # Skip feed-forward, just pass through with residual connection
+                hidden_states = residual
             
             if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
                 print(f"ERROR: NaN/Inf detected in final hidden_states!")
             
-            # Return output with optional cached key-values and quantization info
-            if use_cache:
+            # Return output with optional cached key-values
+            if use_cache and apply_attention:
                 return hidden_states, present_key_value
             else:
                 return hidden_states 
