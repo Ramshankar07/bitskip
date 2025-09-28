@@ -167,7 +167,7 @@ class BitTransformerBlock2(nn.Module):
                 print(f"ERROR: NaN/Inf detected in final hidden_states!")
             
             # Return output with optional cached key-values
-            if use_cache and apply_attention:
+            if use_cache:
                 return hidden_states, present_key_value
             else:
                 return hidden_states 
