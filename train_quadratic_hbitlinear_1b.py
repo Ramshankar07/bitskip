@@ -83,7 +83,7 @@ class BitNetForCausalLM(nn.Module):
             attention_mask=attention_mask,
             labels=labels,
             return_dict=True,
-            **kwargs
+        **kwargs
         )
         
         # Return in simple dict format for compatibility
@@ -829,7 +829,7 @@ def main():
     # Cleanup
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        
+    
     logger.info("Training completed successfully!")
 
 

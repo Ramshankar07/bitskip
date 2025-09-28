@@ -351,17 +351,39 @@ class BitNetModel2(nn.Module):
                 layer_fn = self._get_layer_fn(layer_idx)
                 
                 # Apply layer skipping
-                hidden_states, skip_mask = self.layer_skipping(
-                    hidden_states=hidden_states,
-                    layer_idx=layer_idx,
-                    layer_fn=layer_fn,
-                    attention_mask=attention_mask,
-                    layer_past=layer_past[layer_idx] if layer_past is not None else None,
-                    use_cache=use_cache,
-                    position_ids=position_ids,
-                    exit_layer=exit_layer,
-                    training_step=training_step,
-                )
+                try:
+                    hidden_states, skip_mask = self.layer_skipping(
+                        hidden_states=hidden_states,
+                        layer_idx=layer_idx,
+                        layer_fn=layer_fn,
+                        attention_mask=attention_mask,
+                        layer_past=layer_past[layer_idx] if layer_past is not None else None,
+                        use_cache=use_cache,
+                        position_ids=position_ids,
+                        exit_layer=exit_layer,
+                        training_step=training_step,
+                    )
+                except ValueError as e:
+                    if "too many values to unpack" in str(e):
+                        print(f"DEBUG: Layer skipping error at layer {layer_idx}: {e}")
+                        # Get the actual return value to debug
+                        result = self.layer_skipping(
+                            hidden_states=hidden_states,
+                            layer_idx=layer_idx,
+                            layer_fn=layer_fn,
+                            attention_mask=attention_mask,
+                            layer_past=layer_past[layer_idx] if layer_past is not None else None,
+                            use_cache=use_cache,
+                            position_ids=position_ids,
+                            exit_layer=exit_layer,
+                            training_step=training_step,
+                        )
+                        print(f"DEBUG: Actual return type: {type(result)}")
+                        if isinstance(result, tuple):
+                            print(f"DEBUG: Tuple length: {len(result)}")
+                        raise e
+                    else:
+                        raise e
                 
                 if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
                     print(f"ERROR: NaN/Inf detected in hidden_states after layer {layer_idx}!")

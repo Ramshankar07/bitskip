@@ -664,10 +664,10 @@ def main():
         weight_bits=2,
         use_layer_skipping=True,
         skip_probability=0.1,
-        min_layers_to_keep=8,
+        min_layers_to_keep=8, 
         use_early_exit=False,  # Disabled for memory efficiency
-        early_exit_threshold=args.early_exit_threshold,
-        dropout_schedule='quadratic',
+        early_exit_threshold=args.early_exit_threshold, 
+        dropout_schedule='quadratic', 
         quadratic_constant=args.quadratic_constant
     )
     

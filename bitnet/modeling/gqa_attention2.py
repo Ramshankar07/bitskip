@@ -98,18 +98,12 @@ class BitNetGQA2(nn.Module):
         # Scaling factor for attention scores
         self.scale = 1.0 / math.sqrt(self.head_dim)
         
-        # Initialize weights
-        self._init_weights()
-    
+            
     def _is_power_of_2(self, n: int) -> bool:
         """Check if a number is a power of 2."""
         return n > 0 and (n & (n - 1)) == 0
     
-    def _init_weights(self):
-        """Initialize weights using Xavier uniform initialization."""
-        for module in [self.q_proj, self.k_proj, self.v_proj, self.o_proj]:
-            if hasattr(module, 'weight') and module.weight is not None:
-                nn.init.xavier_uniform_(module.weight)
+    
     
     def _repeat_kv(self, x: torch.Tensor, n_rep: int) -> torch.Tensor:
         """
