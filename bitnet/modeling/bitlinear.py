@@ -128,14 +128,16 @@ class BitLinear(nn.Module):
         
 
         
-        if self.training if isinstance(self.training, bool) else bool(self.training):
+        is_training = self.training if isinstance(self.training, bool) else bool(self.training)
+        if is_training:
             # During training, use Straight-Through Estimator for backprop
             w_q, w_scale = self._weight_quantize(self.weight)
             w_original = self.weight.data.clone()
             self.weight.data = w_q * w_scale
             
             # Check for extreme scaling
-            if w_scale / x_scale > 1000:
+            scaling_ratio = w_scale / x_scale
+            if scaling_ratio.max().item() > 1000:
                 print(f"WARNING: Extreme scaling ratio detected!")
             
             output = F.linear(x_q, self.weight, self.bias) / x_scale

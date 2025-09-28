@@ -116,7 +116,7 @@ def compute_early_exit_loss(
             
             layer_loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
             
-            if torch.isnan(layer_loss).any() or torch.isinf(layer_loss).any():
+            if torch.isnan(layer_loss).any().item() or torch.isinf(layer_loss).any().item():
                 print(f"ERROR: NaN/Inf detected in early exit loss for layer {l}!")
                 continue
             
