@@ -236,8 +236,10 @@ class BitNetConfig:
         self.intermediate_size = kwargs.get('intermediate_size', 4096)
         self.max_position_embeddings = kwargs.get('max_position_embeddings', 1024)
         self.rms_norm_eps = kwargs.get('rms_norm_eps', 1e-5)
+        self.layer_norm_eps = kwargs.get('layer_norm_eps', 1e-5)
         self.hidden_dropout_prob = kwargs.get('hidden_dropout_prob', 0.1)
         self.attention_dropout = kwargs.get('attention_dropout', 0.1)
+        self.attention_probs_dropout_prob = kwargs.get('attention_dropout', 0.1)
         self.initializer_range = kwargs.get('initializer_range', 0.01)
         self.activation_bits = kwargs.get('activation_bits', 8)
         self.weight_bits = kwargs.get('weight_bits', 2)
@@ -555,6 +557,8 @@ def parse_args():
                        help='Number of key-value heads for GQA (default: 4 for ~2B parameters)')
     parser.add_argument('--intermediate_size', type=int, default=4096,
                        help='Intermediate size for feed-forward network')
+    parser.add_argument('--layer_norm_eps', type=float, default=1e-5,
+                       help='Layer normalization epsilon')
     parser.add_argument('--batch_size', type=int, default=4,
                       help='Training batch size (default: 4 for 2B model stability)')
     parser.add_argument('--learning_rate', type=float, default=1e-5,
@@ -659,6 +663,7 @@ def main():
         intermediate_size=args.intermediate_size,
         max_position_embeddings=args.max_length,
         rms_norm_eps=1e-5,
+        layer_norm_eps=args.layer_norm_eps,
         hidden_dropout_prob=0.1,
         attention_dropout=0.1,
         initializer_range=0.01,
