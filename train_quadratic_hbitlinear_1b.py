@@ -211,11 +211,11 @@ class BitNetConfig:
     
     def __init__(self, **kwargs):
         self.vocab_size = kwargs.get('vocab_size', 128256)
-        self.hidden_size = kwargs.get('hidden_size', 1024)  # Changed to 1024 (2^10) for H-BitLinear compatibility
-        self.num_hidden_layers = kwargs.get('num_hidden_layers', 20)
-        self.num_attention_heads = kwargs.get('num_attention_heads', 16)  # head_dim = 1024/16 = 64 (power of 2)
+        self.hidden_size = kwargs.get('hidden_size', 2048)  # Increased to 2048 (2^11) for larger model
+        self.num_hidden_layers = kwargs.get('num_hidden_layers', 14)  # Reduced to achieve ~1B parameters
+        self.num_attention_heads = kwargs.get('num_attention_heads', 16)  # head_dim = 2048/16 = 128 (power of 2)
         self.num_key_value_heads = kwargs.get('num_key_value_heads', 4)
-        self.intermediate_size = kwargs.get('intermediate_size', 2048)  # Changed to 2048 (2^11) for H-BitLinear compatibility
+        self.intermediate_size = kwargs.get('intermediate_size', 4096)  # Increased to 4096 (2^12) for larger model
         self.max_position_embeddings = kwargs.get('max_position_embeddings', 1024)
         self.hidden_dropout_prob = kwargs.get('hidden_dropout_prob', 0.1)
         self.initializer_range = kwargs.get('initializer_range', 0.02)
@@ -515,11 +515,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description='BitNet 1B Parameter Training with H-BitLinear')
     
     # Model configuration - H-BitLinear compatible (all dimensions must be powers of 2)
-    parser.add_argument('--hidden_size', type=int, default=1024)  # Changed to 1024 (2^10) for H-BitLinear compatibility
-    parser.add_argument('--num_hidden_layers', type=int, default=20)
-    parser.add_argument('--num_attention_heads', type=int, default=16)  # head_dim = 1024/16 = 64 (power of 2)
+    parser.add_argument('--hidden_size', type=int, default=2048)  # Increased to 2048 (2^11) for larger model
+    parser.add_argument('--num_hidden_layers', type=int, default=14)  # Reduced to achieve ~1B parameters
+    parser.add_argument('--num_attention_heads', type=int, default=16)  # head_dim = 2048/16 = 128 (power of 2)
     parser.add_argument('--num_key_value_heads', type=int, default=4)
-    parser.add_argument('--intermediate_size', type=int, default=2048)  # Changed to 2048 (2^11) for H-BitLinear compatibility
+    parser.add_argument('--intermediate_size', type=int, default=4096)  # Increased to 4096 (2^12) for larger model
     
     # Training configuration - Optimized for H200 GPU utilization
     parser.add_argument('--batch_size', type=int, default=16)  # Increased from 2 to 16 for better GPU utilization
