@@ -244,11 +244,13 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
         logger.info("Loading FineWeb-Edu dataset with HuggingFace streaming...")
         
         # Load the dataset in streaming mode
+        logger.info("Calling load_dataset...")
         dataset = load_dataset(
             "HuggingFaceFW/fineweb-edu",
             split="train",
             streaming=True
         )
+        logger.info("Dataset loaded successfully")
         
         # Create a simple tokenization function
         def tokenize_function(examples):
@@ -303,6 +305,7 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
             }
         
         # Create PyTorch DataLoader
+        logger.info("Creating PyTorch DataLoader...")
         dataloader = DataLoader(
             tokenized_dataset,
             batch_size=batch_size,
@@ -310,6 +313,7 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
             num_workers=0,  # Set to 0 to avoid multiprocessing issues with streaming
             pin_memory=True if torch.cuda.is_available() else False
         )
+        logger.info("PyTorch DataLoader created successfully")
         
         logger.info("Successfully created HuggingFace streaming dataloader")
         return dataloader, False
@@ -636,9 +640,11 @@ def main():
         logger.error("No tokenizer available, cannot create data loader")
         return
     
+    logger.info("Creating data loader...")
     dataloader, is_random = create_data_loader(
         tokenizer, args.batch_size, args.max_length, args.num_steps
     )
+    logger.info("Data loader created successfully")
     if is_random:
         logger.warning("Using random data for testing - this is not ideal for actual training")
     
@@ -674,21 +680,29 @@ def main():
     model.train()
     
     # Create iterator for the dataloader
+    logger.info("Creating dataloader iterator...")
     dataloader_iter = iter(dataloader)
+    logger.info("Dataloader iterator created successfully")
     
     for step in range(1, args.num_steps + 1):
         try:
+            logger.info(f"Starting step {step}")
             total_loss = 0
             
             # Gradient Accumulation Loop
             for micro_step in range(args.gradient_accumulation_steps):
+                logger.info(f"Starting micro_step {micro_step} of step {step}")
                 # Get batch from iterator
                 try:
+                    logger.info("Getting next batch from dataloader...")
                     batch = next(dataloader_iter)
+                    logger.info("Batch retrieved successfully")
                 except StopIteration:
+                    logger.info("StopIteration caught, restarting dataloader iterator...")
                     # Restart iterator if we've exhausted the dataset
                     dataloader_iter = iter(dataloader)
                     batch = next(dataloader_iter)
+                    logger.info("New batch retrieved after restart")
                 
                 # Move to device
                 input_ids = batch['input_ids'].to(device)
