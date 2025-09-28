@@ -119,43 +119,152 @@ class BitNetConfig:
 
 
 def create_data_loader(tokenizer, batch_size, max_length, num_steps):
-    """Create streaming data loader with FineWeb-Edu dataset."""
-    from bitnet.data.streaming_loader import create_streaming_dataloader
+    """Create streaming data loader using HuggingFace datasets and PyTorch DataLoader."""
+    from datasets import load_dataset, IterableDataset
+    from torch.utils.data import DataLoader
+    import logging
+    
+    logger = logging.getLogger(__name__)
     
     try:
-        # Use the streaming loader with FineWeb-Edu dataset
-        logger = logging.getLogger(__name__)
-        logger.info("Loading FineWeb-Edu dataset with streaming...")
+        # Load streaming dataset from HuggingFace
+        logger.info("Loading FineWeb-Edu dataset with HuggingFace streaming...")
         
-        dataloader = create_streaming_dataloader(
-            dataset_name="HuggingFaceFW/fineweb-edu",
-            subset="sample-10BT",
-            tokenizer=tokenizer,
-            batch_size=batch_size,
-            max_length=max_length,
-            streaming=True,
-            text_column="text"
+        # Load the dataset in streaming mode
+        dataset = load_dataset(
+            "HuggingFaceFW/fineweb-edu",
+            split="sample-10BT",
+            streaming=True
         )
         
-        logger.info("Successfully created streaming dataloader")
+        # Create a simple tokenization function
+        def tokenize_function(examples):
+            # Tokenize the text
+            tokenized = tokenizer(
+                examples["text"],
+                truncation=True,
+                padding=False,
+                max_length=max_length,
+                return_tensors=None  # Return lists, not tensors
+            )
+            
+            # Create labels (same as input_ids for causal LM)
+            tokenized["labels"] = tokenized["input_ids"].copy()
+            
+            return tokenized
+        
+        # Apply tokenization
+        tokenized_dataset = dataset.map(
+            tokenize_function,
+            batched=True,
+            batch_size=1000,  # Process in batches for efficiency
+            remove_columns=["text"]  # Remove original text column
+        )
+        
+        # Create a simple collate function for batching
+        def collate_fn(batch):
+            # Get the maximum length in this batch
+            max_len = max(len(item["input_ids"]) for item in batch)
+            
+            # Pad sequences to the same length
+            input_ids = []
+            attention_masks = []
+            labels = []
+            
+            for item in batch:
+                seq_len = len(item["input_ids"])
+                
+                # Pad with tokenizer.pad_token_id
+                padded_input_ids = item["input_ids"] + [tokenizer.pad_token_id] * (max_len - seq_len)
+                padded_attention_mask = [1] * seq_len + [0] * (max_len - seq_len)
+                padded_labels = item["labels"] + [-100] * (max_len - seq_len)  # -100 for padding in labels
+                
+                input_ids.append(padded_input_ids)
+                attention_masks.append(padded_attention_mask)
+                labels.append(padded_labels)
+            
+            return {
+                "input_ids": torch.tensor(input_ids, dtype=torch.long),
+                "attention_mask": torch.tensor(attention_masks, dtype=torch.long),
+                "labels": torch.tensor(labels, dtype=torch.long)
+            }
+        
+        # Create PyTorch DataLoader
+        dataloader = DataLoader(
+            tokenized_dataset,
+            batch_size=batch_size,
+            collate_fn=collate_fn,
+            num_workers=0,  # Set to 0 to avoid multiprocessing issues with streaming
+            pin_memory=True if torch.cuda.is_available() else False
+        )
+        
+        logger.info("Successfully created HuggingFace streaming dataloader")
         return dataloader, False
         
     except Exception as e:
-        logger = logging.getLogger(__name__)
         logger.warning(f"Could not load FineWeb-Edu dataset: {e}")
         logger.info("Trying alternative dataset...")
         
         try:
             # Try alternative dataset
-            dataloader = create_streaming_dataloader(
-                dataset_name="allenai/dolmino-mix-1124",
-                subset="default",
-                tokenizer=tokenizer,
-                batch_size=batch_size,
-                max_length=max_length,
-                streaming=True,
-                text_column="text"
+            logger.info("Loading allenai/dolmino-mix-1124 dataset...")
+            dataset = load_dataset(
+                "allenai/dolmino-mix-1124",
+                split="default",
+                streaming=True
             )
+            
+            # Same tokenization and collate functions
+            def tokenize_function(examples):
+                tokenized = tokenizer(
+                    examples["text"],
+                    truncation=True,
+                    padding=False,
+                    max_length=max_length,
+                    return_tensors=None
+                )
+                tokenized["labels"] = tokenized["input_ids"].copy()
+                return tokenized
+            
+            def collate_fn(batch):
+                max_len = max(len(item["input_ids"]) for item in batch)
+                
+                input_ids = []
+                attention_masks = []
+                labels = []
+                
+                for item in batch:
+                    seq_len = len(item["input_ids"])
+                    
+                    padded_input_ids = item["input_ids"] + [tokenizer.pad_token_id] * (max_len - seq_len)
+                    padded_attention_mask = [1] * seq_len + [0] * (max_len - seq_len)
+                    padded_labels = item["labels"] + [-100] * (max_len - seq_len)
+                    
+                    input_ids.append(padded_input_ids)
+                    attention_masks.append(padded_attention_mask)
+                    labels.append(padded_labels)
+                
+                return {
+                    "input_ids": torch.tensor(input_ids, dtype=torch.long),
+                    "attention_mask": torch.tensor(attention_masks, dtype=torch.long),
+                    "labels": torch.tensor(labels, dtype=torch.long)
+                }
+            
+            tokenized_dataset = dataset.map(
+                tokenize_function,
+                batched=True,
+                batch_size=1000,
+                remove_columns=["text"]
+            )
+            
+            dataloader = DataLoader(
+                tokenized_dataset,
+                batch_size=batch_size,
+                collate_fn=collate_fn,
+                num_workers=0,
+                pin_memory=True if torch.cuda.is_available() else False
+            )
+            
             logger.info("Successfully loaded alternative dataset")
             return dataloader, False
             
@@ -344,14 +453,22 @@ def main():
     
     model.train()
     
+    # Create iterator for the dataloader
+    dataloader_iter = iter(dataloader)
+    
     for step in range(1, args.num_steps + 1):
         try:
             total_loss = 0
             
             # Gradient Accumulation Loop
             for micro_step in range(args.gradient_accumulation_steps):
-                # Get batch
-                batch = next(iter(dataloader))
+                # Get batch from iterator
+                try:
+                    batch = next(dataloader_iter)
+                except StopIteration:
+                    # Restart iterator if we've exhausted the dataset
+                    dataloader_iter = iter(dataloader)
+                    batch = next(dataloader_iter)
                 
                 # Move to device
                 input_ids = batch['input_ids'].to(device)
