@@ -5,7 +5,7 @@ GQA reduces memory usage by having multiple query heads share the same key and v
 
 import math
 import logging
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Union
 
 import torch
 import torch.nn as nn
