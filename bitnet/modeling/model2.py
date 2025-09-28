@@ -286,7 +286,6 @@ class BitNetModel2(nn.Module):
         exit_layer: Optional[int] = None,
         training_step: Optional[int] = None,
         labels: Optional[torch.LongTensor] = None,
-        cache_position: Optional[torch.LongTensor] = None,
         past_key_values: Optional[List[Tuple[torch.FloatTensor]]] = None,  # NEW9
     ) -> Union[Tuple, Dict]:
         """

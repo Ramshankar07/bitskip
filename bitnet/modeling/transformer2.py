@@ -60,7 +60,6 @@ class BitTransformerBlock2(nn.Module):
         layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache: bool = False,
         position_ids: Optional[torch.Tensor] = None,
-        cache_position: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]], Tuple[torch.Tensor, Dict], Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor], Dict]]:
         """
         Forward pass of the transformer block.
@@ -87,7 +86,6 @@ class BitTransformerBlock2(nn.Module):
                 past_key_value=layer_past,
                 use_cache=use_cache,
                 position_ids=position_ids,
-                cache_position=cache_position,
             )
             
             

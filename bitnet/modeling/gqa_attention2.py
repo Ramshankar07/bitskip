@@ -148,8 +148,6 @@ class BitNetGQA2(nn.Module):
             position_ids: Optional position IDs for RoPE
             past_key_value: Optional cached key-value pairs
             use_cache: Whether to cache key-value pairs
-            cache_position: Optional cache position for generation
-            return_quantization_info: Whether to return quantization loss information
             
         Returns:
             Attention output (and optionally cached key-values if use_cache=True)
