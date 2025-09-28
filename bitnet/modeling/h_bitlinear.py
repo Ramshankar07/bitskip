@@ -109,8 +109,36 @@ class HBitLinear(nn.Module):
         w_quantized[w < -0.5 * scale] = -1.0
         return w_quantized, scale
 
-    
+    def _activation_quantize(self, x: torch.Tensor, bits: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Quantize activations to specified bit width with numerical stability.
+        
+        Args:
+            x: Activation tensor to quantize
+            bits: Number of bits for quantization (default: 4 for H-BitLinear)
+            
+        Returns:
+            Tuple of (quantized activations, scale factor)
+        """
+        if bits is None:
+            bits = 4  # Default for H-BitLinear
+            
+        # Calculate scaling factor with improved numerical stability
+        scale = x.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-6, max=1e6)
+        
+        # Scale to target bit range with bounds checking
+        max_val = (1 << (bits - 1)) - 1
+        scale_factor = max_val / scale
+        
+        # Clamp scale factor to prevent extreme values
+        scale_factor = scale_factor.clamp(min=1e-6, max=1e6)
+        
+        x_scaled = (x * scale_factor).round().clamp(-max_val, max_val)
+        
+        # Return quantized values and scale for dequantization
+        return x_scaled, scale
 
+    
 
     def forward(self, x: torch.Tensor, bits: int = 4, ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
         """
