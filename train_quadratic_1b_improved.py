@@ -133,7 +133,7 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
         # Load the dataset in streaming mode
         dataset = load_dataset(
             "HuggingFaceFW/fineweb-edu",
-            split="sample-10BT",
+            split="train",
             streaming=True
         )
         
@@ -210,7 +210,7 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
             logger.info("Loading allenai/dolmino-mix-1124 dataset...")
             dataset = load_dataset(
                 "allenai/dolmino-mix-1124",
-                split="default",
+                split="train",
                 streaming=True
             )
             
@@ -269,8 +269,85 @@ def create_data_loader(tokenizer, batch_size, max_length, num_steps):
             return dataloader, False
             
         except Exception as e2:
-            logger.warning(f"Could not load alternative dataset: {e2}")
-            logger.warning("Using random data for testing")
+            logger.warning(f"Could not load allenai/dolmino-mix-1124: {e2}")
+            logger.info("Trying additional fallback datasets...")
+            
+            # Try more fallback datasets
+            fallback_datasets = [
+                ("wikitext", "wikitext-2-raw-v1", "train"),
+                ("c4", "en", "train"),
+                ("openwebtext", None, "train"),
+            ]
+            
+            dataset_loaded = False
+            for dataset_name, config, split in fallback_datasets:
+                try:
+                    logger.info(f"Trying {dataset_name} dataset...")
+                    if config:
+                        dataset = load_dataset(dataset_name, config, split=split, streaming=True)
+                    else:
+                        dataset = load_dataset(dataset_name, split=split, streaming=True)
+                    
+                    # Same tokenization and collate functions
+                    def tokenize_function(examples):
+                        tokenized = tokenizer(
+                            examples["text"],
+                            truncation=True,
+                            padding=False,
+                            max_length=max_length,
+                            return_tensors=None
+                        )
+                        tokenized["labels"] = tokenized["input_ids"].copy()
+                        return tokenized
+                    
+                    def collate_fn(batch):
+                        max_len = max(len(item["input_ids"]) for item in batch)
+                        
+                        input_ids = []
+                        attention_masks = []
+                        labels = []
+                        
+                        for item in batch:
+                            seq_len = len(item["input_ids"])
+                            
+                            padded_input_ids = item["input_ids"] + [tokenizer.pad_token_id] * (max_len - seq_len)
+                            padded_attention_mask = [1] * seq_len + [0] * (max_len - seq_len)
+                            padded_labels = item["labels"] + [-100] * (max_len - seq_len)
+                            
+                            input_ids.append(padded_input_ids)
+                            attention_masks.append(padded_attention_mask)
+                            labels.append(padded_labels)
+                        
+                        return {
+                            "input_ids": torch.tensor(input_ids, dtype=torch.long),
+                            "attention_mask": torch.tensor(attention_masks, dtype=torch.long),
+                            "labels": torch.tensor(labels, dtype=torch.long)
+                        }
+                    
+                    tokenized_dataset = dataset.map(
+                        tokenize_function,
+                        batched=True,
+                        batch_size=1000,
+                        remove_columns=["text"]
+                    )
+                    
+                    dataloader = DataLoader(
+                        tokenized_dataset,
+                        batch_size=batch_size,
+                        collate_fn=collate_fn,
+                        num_workers=0,
+                        pin_memory=True if torch.cuda.is_available() else False
+                    )
+                    
+                    logger.info(f"Successfully loaded {dataset_name} dataset")
+                    return dataloader, False
+                    
+                except Exception as e3:
+                    logger.warning(f"Could not load {dataset_name}: {e3}")
+                    continue
+            
+            if not dataset_loaded:
+                logger.warning("Could not load any real dataset, using random data for testing")
             
             # Create random data for testing
             class RandomDataLoader:
