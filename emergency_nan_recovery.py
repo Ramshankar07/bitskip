@@ -215,14 +215,50 @@ def emergency_fix_model(model, config=None):
                             nn.init.zeros_(module.bias)
                         fixes_applied.append(f"Fixed linear layer {name}")
         
-        # Step 5: Fix LayerNorm parameters
+        # Step 5: Fix LayerNorm parameters (enhanced for BitNet)
         for name, module in model.named_modules():
+            # Handle regular LayerNorm
             if isinstance(module, nn.LayerNorm):
-                if torch.isnan(module.weight).any().item() or torch.isinf(module.weight).any().item():
+                weight_corrupted = torch.isnan(module.weight).any().item() or torch.isinf(module.weight).any().item()
+                bias_corrupted = torch.isnan(module.bias).any().item() or torch.isinf(module.bias).any().item()
+                
+                if weight_corrupted or bias_corrupted:
                     print(f"🔧 Fixing LayerNorm '{name}'...")
-                    module.weight.fill_(1.0)
-                    module.bias.zero_()
+                    with torch.no_grad():
+                        if weight_corrupted:
+                            module.weight.fill_(1.0)
+                        if bias_corrupted:
+                            module.bias.zero_()
                     fixes_applied.append(f"Fixed LayerNorm {name}")
+            
+            # Handle SublayerNorm (used in BitNet)
+            elif hasattr(module, '__class__') and 'SublayerNorm' in module.__class__.__name__:
+                if hasattr(module, 'weight') and hasattr(module, 'bias'):
+                    weight_corrupted = torch.isnan(module.weight).any().item() or torch.isinf(module.weight).any().item()
+                    bias_corrupted = torch.isnan(module.bias).any().item() or torch.isinf(module.bias).any().item()
+                    
+                    if weight_corrupted or bias_corrupted:
+                        print(f"🔧 Fixing SublayerNorm '{name}'...")
+                        with torch.no_grad():
+                            if weight_corrupted:
+                                module.weight.fill_(1.0)
+                            if bias_corrupted:
+                                module.bias.zero_()
+                        fixes_applied.append(f"Fixed SublayerNorm {name}")
+            
+            # Handle SublayerNormWithResidual (used in BitNet)
+            elif hasattr(module, 'norm') and hasattr(module.norm, 'weight') and hasattr(module.norm, 'bias'):
+                weight_corrupted = torch.isnan(module.norm.weight).any().item() or torch.isinf(module.norm.weight).any().item()
+                bias_corrupted = torch.isnan(module.norm.bias).any().item() or torch.isinf(module.norm.bias).any().item()
+                
+                if weight_corrupted or bias_corrupted:
+                    print(f"🔧 Fixing SublayerNormWithResidual '{name}'...")
+                    with torch.no_grad():
+                        if weight_corrupted:
+                            module.norm.weight.fill_(1.0)
+                        if bias_corrupted:
+                            module.norm.bias.zero_()
+                    fixes_applied.append(f"Fixed SublayerNormWithResidual {name}")
         
         # Step 6: Fix buffers (especially weight_scale in BitLinear)
         for name, buffer in model.named_buffers():
@@ -241,13 +277,48 @@ def emergency_fix_model(model, config=None):
         
         # Step 7: Aggressive fix for severely corrupted models
         corruption_count = 0
+        layernorm_corruption_count = 0
+        
         for name, param in model.named_parameters():
             if torch.isnan(param).any().item() or torch.isinf(param).any().item():
                 corruption_count += 1
+                if 'layernorm' in name.lower() or 'norm' in name.lower():
+                    layernorm_corruption_count += 1
         
-        if corruption_count > 100:  # Severe corruption
-            print(f"\n🚨 SEVERE CORRUPTION DETECTED ({corruption_count} parameters)")
+        if corruption_count > 100 or layernorm_corruption_count > 10:  # Severe corruption
+            print(f"\n🚨 SEVERE CORRUPTION DETECTED ({corruption_count} parameters, {layernorm_corruption_count} LayerNorm)")
             print("Applying aggressive recovery...")
+            
+            # Special aggressive LayerNorm fix first
+            if layernorm_corruption_count > 0:
+                print(f"\n🔥 AGGRESSIVE LayerNorm fix for {layernorm_corruption_count} corrupted layers...")
+                with torch.no_grad():
+                    for name, module in model.named_modules():
+                        # Handle regular LayerNorm
+                        if isinstance(module, nn.LayerNorm):
+                            module.weight.data.fill_(1.0)
+                            module.bias.data.zero_()
+                            if hasattr(module, 'running_mean'):
+                                module.running_mean.zero_()
+                            if hasattr(module, 'running_var'):
+                                module.running_var.fill_(1.0)
+                            print(f"Force reset LayerNorm {name}")
+                            fixes_applied.append(f"Force reset LayerNorm {name}")
+                        
+                        # Handle SublayerNorm
+                        elif hasattr(module, '__class__') and 'SublayerNorm' in module.__class__.__name__:
+                            if hasattr(module, 'weight') and hasattr(module, 'bias'):
+                                module.weight.data.fill_(1.0)
+                                module.bias.data.zero_()
+                                print(f"Force reset SublayerNorm {name}")
+                                fixes_applied.append(f"Force reset SublayerNorm {name}")
+                        
+                        # Handle SublayerNormWithResidual
+                        elif hasattr(module, 'norm') and hasattr(module.norm, 'weight') and hasattr(module.norm, 'bias'):
+                            module.norm.weight.data.fill_(1.0)
+                            module.norm.bias.data.zero_()
+                            print(f"Force reset SublayerNormWithResidual {name}")
+                            fixes_applied.append(f"Force reset SublayerNormWithResidual {name}")
             
             # Reinitialize ALL parameters
             for name, module in model.named_modules():
@@ -283,11 +354,55 @@ def verify_model_health(model):
     print("="*60)
     
     is_healthy = True
+    layernorm_issues = 0
     
     # Check for NaN/Inf
     for name, param in model.named_parameters():
         if torch.isnan(param).any().item() or torch.isinf(param).any().item():
             print(f"❌ Still has NaN/Inf in {name}")
+            is_healthy = False
+            if 'layernorm' in name.lower() or 'norm' in name.lower():
+                layernorm_issues += 1
+    
+    # Special check for LayerNorm issues
+    if layernorm_issues > 0:
+        print(f"\n⚠️ LayerNorm corruption detected: {layernorm_issues} layers")
+        print("Applying emergency LayerNorm fix...")
+        
+        with torch.no_grad():
+            for name, module in model.named_modules():
+                # Handle regular LayerNorm
+                if isinstance(module, nn.LayerNorm):
+                    module.weight.data.fill_(1.0)
+                    module.bias.data.zero_()
+                    if hasattr(module, 'running_mean'):
+                        module.running_mean.zero_()
+                    if hasattr(module, 'running_var'):
+                        module.running_var.fill_(1.0)
+                
+                # Handle SublayerNorm
+                elif hasattr(module, '__class__') and 'SublayerNorm' in module.__class__.__name__:
+                    if hasattr(module, 'weight') and hasattr(module, 'bias'):
+                        module.weight.data.fill_(1.0)
+                        module.bias.data.zero_()
+                
+                # Handle SublayerNormWithResidual
+                elif hasattr(module, 'norm') and hasattr(module.norm, 'weight') and hasattr(module.norm, 'bias'):
+                    module.norm.weight.data.fill_(1.0)
+                    module.norm.bias.data.zero_()
+        
+        # Re-check after fix
+        layernorm_issues_after = 0
+        for name, param in model.named_parameters():
+            if torch.isnan(param).any().item() or torch.isinf(param).any().item():
+                if 'layernorm' in name.lower() or 'norm' in name.lower():
+                    layernorm_issues_after += 1
+        
+        if layernorm_issues_after == 0:
+            print("✅ LayerNorm issues resolved")
+            is_healthy = True
+        else:
+            print(f"❌ LayerNorm issues persist: {layernorm_issues_after} layers")
             is_healthy = False
     
     # Test forward pass with dummy input
