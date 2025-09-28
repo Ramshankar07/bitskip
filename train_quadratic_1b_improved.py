@@ -27,6 +27,9 @@ load_dotenv()
 from bitnet.modeling.model import BitNetModel
 from bitnet.utils.default_config import DefaultConfig
 
+# Import emergency recovery
+from emergency_nan_recovery import recover_from_nan, diagnose_model_corruption
+
 
 class BitNetForCausalLM(nn.Module):
     """
@@ -589,6 +592,19 @@ def main():
                     )
                     loss = outputs['loss']
                     
+                    # Check for NaN/Inf in loss
+                    if torch.isnan(loss).any().item() or torch.isinf(loss).any().item() or loss.item() > 100:
+                        logger.error(f"🚨 NaN/Inf/Extreme loss detected at step {step}: {loss.item()}")
+                        logger.error("Running emergency recovery...")
+                        
+                        # Run emergency recovery
+                        model, optimizer, grad_scaler = recover_from_nan(
+                            model, optimizer, grad_scaler, config
+                        )
+                        
+                        # Skip this iteration
+                        continue
+                    
                     # Normalize loss for gradient accumulation
                     loss = loss / args.gradient_accumulation_steps
                 
@@ -643,6 +659,25 @@ def main():
                         logger.info(f"💡 Low GPU utilization ({utilization_percent:.1f}%). Consider increasing batch_size or max_length.")
                     elif utilization_percent > 90:
                         logger.warning(f"⚠️ High GPU utilization ({utilization_percent:.1f}%). Monitor for OOM errors.")
+            
+            # Periodic health check every 50 steps
+            if step % 50 == 0:
+                logger.info("🔍 Running periodic model health check...")
+                corruption_found = False
+                
+                # Quick check for NaN/Inf in parameters
+                for name, param in model.named_parameters():
+                    if torch.isnan(param).any().item() or torch.isinf(param).any().item():
+                        logger.error(f"🚨 NaN/Inf detected in {name} at step {step}")
+                        corruption_found = True
+                        break
+                
+                if corruption_found:
+                    logger.error("Running emergency recovery...")
+                    model, optimizer, grad_scaler = recover_from_nan(
+                        model, optimizer, grad_scaler, config
+                    )
+                    logger.info("Recovery completed, continuing training...")
             
             # Save checkpoint
             if step % args.save_steps == 0:
