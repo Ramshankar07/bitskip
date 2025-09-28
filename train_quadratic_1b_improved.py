@@ -405,7 +405,7 @@ def parse_args():
     
     # Training configuration
     parser.add_argument('--batch_size', type=int, default=2)
-    parser.add_argument('--learning_rate', type=float, default=5e-5)
+    parser.add_argument('--learning_rate', type=float, default=1e-5)  # Reduced from 5e-5 to 1e-5
     parser.add_argument('--max_length', type=int, default=1024)
     parser.add_argument('--num_steps', type=int, default=1000)
     parser.add_argument('--warmup_steps', type=int, default=100)
@@ -568,9 +568,9 @@ def main():
                 grad_scaler.scale(loss).backward()
                 total_loss += loss.item()
             
-            # Clip gradients after accumulation
+            # Clip gradients after accumulation with more aggressive clipping
             grad_scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)  # Reduced from 1.0 to 0.5
             
             # Update weights
             grad_scaler.step(optimizer)

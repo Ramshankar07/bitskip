@@ -60,8 +60,10 @@ class BitLinear(nn.Module):
         else:
             self.register_parameter('bias', None)
         
-        # Initialize weights using standard initialization
+        # Initialize weights with conservative scaling to prevent extreme values
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        # Scale down weights to prevent extreme quantization scales
+        self.weight.data *= 0.1
     
     def _weight_quantize(self, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -85,7 +87,7 @@ class BitLinear(nn.Module):
     
     def _activation_quantize(self, x: torch.Tensor, bits: Optional[int] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Quantize activations to specified bit width.
+        Quantize activations to specified bit width with numerical stability.
         
         Args:
             x: Activation tensor to quantize
@@ -97,13 +99,18 @@ class BitLinear(nn.Module):
         if bits is None:
             bits = self.activation_bits
             
+        # Calculate scaling factor with improved numerical stability
+        scale = x.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-6, max=1e6)
         
-            
-        # Calculate scaling factor (max of absolute values per token)
-        scale = x.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-5)
-        # Scale to target bit range
+        # Scale to target bit range with bounds checking
         max_val = (1 << (bits - 1)) - 1
-        x_scaled = (x * (max_val / scale)).round().clamp(-max_val, max_val)
+        scale_factor = max_val / scale
+        
+        # Clamp scale factor to prevent extreme values
+        scale_factor = scale_factor.clamp(min=1e-6, max=1e6)
+        
+        x_scaled = (x * scale_factor).round().clamp(-max_val, max_val)
+        
         # Return quantized values and scale for dequantization
         return x_scaled, scale
     
@@ -135,12 +142,14 @@ class BitLinear(nn.Module):
             w_original = self.weight.data.clone()
             self.weight.data = w_q * w_scale
             
-            # Check for extreme scaling
+            # Check for extreme scaling and handle safely
             scaling_ratio = w_scale / x_scale
             if scaling_ratio.max().item() > 1000:
-                print(f"WARNING: Extreme scaling ratio detected!")
+                print(f"WARNING: Extreme scaling ratio detected! Max: {scaling_ratio.max().item():.2e}")
             
-            output = F.linear(x_q, self.weight, self.bias) / x_scale
+            # Safe division with numerical stability
+            x_scale_safe = x_scale.clamp(min=1e-8)
+            output = F.linear(x_q, self.weight, self.bias) / x_scale_safe
             
             if torch.isnan(output).any().item() or torch.isinf(output).any().item():
                 print(f"ERROR: NaN/Inf detected in BitLinear output before squared_relu!")
@@ -150,8 +159,9 @@ class BitLinear(nn.Module):
             # During inference, use quantized weights directly
             w_q, w_scale = self._weight_quantize(self.weight)
             
-            # Matrix multiplication with quantized values
-            output = F.linear(x_q, w_q * w_scale, self.bias) / x_scale
+            # Safe division with numerical stability
+            x_scale_safe = x_scale.clamp(min=1e-8)
+            output = F.linear(x_q, w_q * w_scale, self.bias) / x_scale_safe
         # Apply Squared ReLU activation
         output = squared_relu(output)
         return output 

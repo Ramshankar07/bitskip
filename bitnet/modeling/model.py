@@ -194,17 +194,21 @@ class BitNetModel(nn.Module):
     
     def _init_weights(self, module: nn.Module) -> None:
         """
-        Initialize the weights of a module.
+        Initialize the weights of a module with conservative scaling.
         
         Args:
             module: Module to initialize
         """
         if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            # Use conservative initialization to prevent extreme values
+            std = min(self.config.initializer_range, 0.01)  # Cap at 0.01
+            module.weight.data.normal_(mean=0.0, std=std)
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            # Use conservative initialization for embeddings
+            std = min(self.config.initializer_range, 0.01)  # Cap at 0.01
+            module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
     
