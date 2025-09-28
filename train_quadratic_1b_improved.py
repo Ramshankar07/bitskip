@@ -403,13 +403,17 @@ def parse_args():
     parser.add_argument('--num_attention_heads', type=int, default=16)
     parser.add_argument('--intermediate_size', type=int, default=3072)
     
-    # Training configuration
-    parser.add_argument('--batch_size', type=int, default=2)
+    # Training configuration - Optimized for H200 GPU utilization
+    parser.add_argument('--batch_size', type=int, default=16)  # Increased from 2 to 16 for better GPU utilization
     parser.add_argument('--learning_rate', type=float, default=1e-5)  # Reduced from 5e-5 to 1e-5
-    parser.add_argument('--max_length', type=int, default=1024)
+    parser.add_argument('--max_length', type=int, default=2048)  # Increased from 1024 to 2048 for longer sequences
     parser.add_argument('--num_steps', type=int, default=1000)
     parser.add_argument('--warmup_steps', type=int, default=100)
-    parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=2)  # Increased from 1 to 2 for effective larger batch size
+    
+    # H200 optimization flags
+    parser.add_argument('--aggressive_batch', action='store_true', help='Use aggressive batch size for maximum H200 utilization')
+    parser.add_argument('--conservative_batch', action='store_true', help='Use conservative batch size for stability')
     
     # Output configuration
     parser.add_argument('--output_dir', type=str, default='./output-bitnet-1b')
@@ -429,11 +433,32 @@ def main():
     # Setup logging
     logger = setup_logging(args.output_dir)
     logger.info("Starting BitNet 1B Parameter Training - Clean Implementation")
+    
+    # Apply H200 optimization flags
+    if args.aggressive_batch:
+        args.batch_size = 32
+        args.max_length = 4096
+        args.gradient_accumulation_steps = 1
+        logger.info("🚀 Using aggressive batch settings for maximum H200 utilization")
+    elif args.conservative_batch:
+        args.batch_size = 8
+        args.max_length = 1024
+        args.gradient_accumulation_steps = 2
+        logger.info("🛡️ Using conservative batch settings for stability")
+    
     logger.info(f"Configuration: {vars(args)}")
     
-    # Device setup
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logger.info(f"Using device: {device}")
+    # Device setup with H200 optimization
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        logger.info(f"Using GPU: {gpu_name}")
+        logger.info(f"GPU Memory: {gpu_memory:.1f} GB")
+        logger.info("🚀 Optimized for H200 GPU utilization")
+    else:
+        device = torch.device('cpu')
+        logger.info("Using CPU")
     
     # Load Llama 3 tokenizer
     try:
@@ -527,6 +552,9 @@ def main():
     
     # Training loop - Clean implementation similar to your example
     logger.info("Starting training loop")
+    logger.info(f"Effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
+    logger.info(f"Sequence length: {args.max_length}")
+    logger.info(f"Expected GPU utilization: ~{args.batch_size * args.max_length / 1000:.1f}% of H200 capacity")
     
     model.train()
     
@@ -599,11 +627,22 @@ def main():
             if step % args.logging_steps == 0:
                 logger.info(f"Step {step}: Loss = {total_loss:.4f}, LR = {current_lr:.2e}")
                 
-                # Memory stats
+                # Enhanced memory stats for H200 optimization
                 if torch.cuda.is_available():
                     allocated = torch.cuda.memory_allocated() / 1024**3
                     reserved = torch.cuda.memory_reserved() / 1024**3
-                    logger.info(f"GPU Memory - Allocated: {allocated:.2f} GB, Reserved: {reserved:.2f} GB")
+                    max_allocated = torch.cuda.max_memory_allocated() / 1024**3
+                    
+                    # Calculate utilization percentage (assuming H200 has ~80GB usable)
+                    utilization_percent = (allocated / 80.0) * 100
+                    
+                    logger.info(f"GPU Memory - Allocated: {allocated:.2f} GB ({utilization_percent:.1f}%), Reserved: {reserved:.2f} GB, Max: {max_allocated:.2f} GB")
+                    
+                    # Suggest optimizations if utilization is low
+                    if utilization_percent < 50:
+                        logger.info(f"💡 Low GPU utilization ({utilization_percent:.1f}%). Consider increasing batch_size or max_length.")
+                    elif utilization_percent > 90:
+                        logger.warning(f"⚠️ High GPU utilization ({utilization_percent:.1f}%). Monitor for OOM errors.")
             
             # Save checkpoint
             if step % args.save_steps == 0:
