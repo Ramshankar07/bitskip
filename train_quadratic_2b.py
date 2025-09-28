@@ -180,7 +180,7 @@ class BitNetForCausalLM(nn.Module):
                     grad_norm = param.grad.data.norm(2).item()
                     total_norm += grad_norm ** 2
                     
-                    if torch.isnan(param.grad).any() or torch.isinf(param.grad).any():
+                    if param.grad is not None and (torch.isnan(param.grad).any() or torch.isinf(param.grad).any()):
                         print(f"WARNING: NaN/Inf gradients in {name}")
                         has_nan_grad = True
                         param.grad.data.zero_()  # Zero out bad gradients
@@ -211,9 +211,9 @@ class BitNetForCausalLM(nn.Module):
         # Check parameters
         for name, param in self.named_parameters():
             if param.requires_grad:
-                if torch.isnan(param).any():
+                if param is not None and torch.isnan(param).any():
                     print(f"NaN in parameters: {name}")
-                if torch.isinf(param).any():
+                if param is not None and torch.isinf(param).any():
                     print(f"Inf in parameters: {name}")
                 if param.abs().max() > 1000:
                     print(f"Large values in {name}: max={param.abs().max().item()}")
