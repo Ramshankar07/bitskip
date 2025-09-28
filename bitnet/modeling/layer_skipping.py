@@ -129,7 +129,6 @@ class LayerSkipping(nn.Module):
         hidden_states: torch.Tensor,
         layer_idx: int,
         layer_fn: callable,
-        return_quantization_info: bool = False,
         **kwargs
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -147,14 +146,19 @@ class LayerSkipping(nn.Module):
         batch_size = hidden_states.size(0)
         
         # Generate skip decisions for this layer
-        if bool(self.training) and layer_idx < self.num_layers - 1:  # FIX: Added bool() and never skip last layer
+        # FIX: Convert self.training to boolean properly
+        is_training = self.training if isinstance(self.training, bool) else bool(self.training)
+        
+        if is_training and layer_idx < self.num_layers - 1:  # Never skip last layer
             skip_prob = self.dropout_probs[layer_idx]
             skip_mask = torch.rand(batch_size, device=hidden_states.device) < skip_prob
         else:
             skip_mask = torch.zeros(batch_size, dtype=torch.bool, device=hidden_states.device)
         
-        # Check if any samples should be skipped - FIX: Added .item() and bool()
-        if skip_mask.any().item() and bool(self.training):
+        # Check if any samples should be skipped - FIX: Use .any().item() to convert to Python bool
+        any_skipped = skip_mask.any().item() if skip_mask.numel() > 0 else False
+        
+        if any_skipped and is_training:
             # Process only non-skipped samples
             non_skip_indices = (~skip_mask).nonzero(as_tuple=True)[0]
             
@@ -181,7 +185,6 @@ class LayerSkipping(nn.Module):
                         filtered_kwargs[key] = value
                 
                 # Process through layer with filtered inputs
-                filtered_kwargs['return_quantization_info'] = return_quantization_info
                 processed_states = layer_fn(non_skip_states, **filtered_kwargs)
                 
                 # Handle different return types from layer_fn
@@ -199,7 +202,6 @@ class LayerSkipping(nn.Module):
                 return hidden_states, skip_mask
         else:
             # No skipping or inference mode
-            kwargs['return_quantization_info'] = return_quantization_info
             output = layer_fn(hidden_states, **kwargs)
             
             # Handle different return types
