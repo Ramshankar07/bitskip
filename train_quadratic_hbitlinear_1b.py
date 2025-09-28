@@ -97,7 +97,7 @@ class BitNetForCausalLM(nn.Module):
         
         # Pre-forward validation
         for key, value in kwargs.items():
-            if isinstance(value, torch.Tensor):
+            if isinstance(value, torch.Tensor) and value is not None:
                 if torch.isnan(value).any() or torch.isinf(value).any():
                     print(f"ERROR: NaN/Inf in input {key}")
                     # Return safe dummy output
@@ -117,7 +117,7 @@ class BitNetForCausalLM(nn.Module):
                 print("ERROR: Non-finite loss detected")
                 output['loss'] = torch.tensor(0.0, device=output['logits'].device, requires_grad=True)
                 
-            if torch.isnan(output['logits']).any() or torch.isinf(output['logits']).any():
+            if output['logits'] is not None and (torch.isnan(output['logits']).any() or torch.isinf(output['logits']).any()):
                 print("ERROR: Non-finite logits detected")
                 # Create safe logits
                 output['logits'] = torch.zeros_like(output['logits'])

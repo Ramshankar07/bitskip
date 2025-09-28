@@ -138,8 +138,6 @@ class BitNetGQA2(nn.Module):
         position_ids: Optional[torch.Tensor] = None,
         past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache: bool = False,
-        cache_position: Optional[torch.Tensor] = None,
-        return_quantization_info: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Forward pass of the GQA attention.
@@ -210,46 +208,17 @@ class BitNetGQA2(nn.Module):
         # Project output
         attn_output = self.o_proj(attn_output)
         
-        # Prepare quantization info if requested
-        quantization_info = {}
-        if return_quantization_info:
-            # Collect quantization losses from H-BitLinear layers
-            quantization_info.update(self.q_proj.collect_quantization_losses())
-            quantization_info.update(self.k_proj.collect_quantization_losses())
-            quantization_info.update(self.v_proj.collect_quantization_losses())
-            quantization_info.update(self.o_proj.collect_quantization_losses())
+        
+        
         
         # Return with optional cached key-values
         if use_cache:
             present_key_value = (key_states, value_states)
-            if return_quantization_info:
-                return attn_output, present_key_value, quantization_info
-            else:
-                return attn_output, present_key_value
+            return attn_output, present_key_value
         else:
-            if return_quantization_info:
-                return attn_output, quantization_info
-            else:
-                return attn_output
+            return attn_output
     
-    def collect_quantization_losses(self) -> Dict[str, torch.Tensor]:
-        """
-        Collect quantization losses from all H-BitLinear layers.
-        
-        Returns:
-            Dictionary containing quantization loss information
-        """
-        quantization_info = {}
-        
-        # Collect from all projections
-        for name, module in [("q_proj", self.q_proj), ("k_proj", self.k_proj), 
-                           ("v_proj", self.v_proj), ("o_proj", self.o_proj)]:
-            module_quant_info = module.collect_quantization_losses()
-            if module_quant_info:
-                for key, value in module_quant_info.items():
-                    quantization_info[f"{name}_{key}"] = value
-        
-        return quantization_info
+    
 
 
 # Alias for backward compatibility
