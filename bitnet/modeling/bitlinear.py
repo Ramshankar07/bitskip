@@ -75,8 +75,10 @@ class BitLinear(nn.Module):
         Returns:
             Tuple of (quantized weights, scale factor)
         """    
-        # Calculate the scaling factor (mean of absolute values)
+        # Calculate the scaling factor (mean of absolute values) with stability
         scale = w.abs().mean()
+        # Clamp scale to prevent extreme values
+        scale = scale.clamp(min=1e-6, max=1e6)
         # Store scale for dequantization
         self.weight_scale = scale
         # Ternary quantization: -1, 0, or 1
@@ -146,6 +148,10 @@ class BitLinear(nn.Module):
             scaling_ratio = w_scale / x_scale
             if scaling_ratio.max().item() > 1000:
                 print(f"WARNING: Extreme scaling ratio detected! Max: {scaling_ratio.max().item():.2e}")
+                # Clamp the scaling ratio to prevent numerical instability
+                scaling_ratio = scaling_ratio.clamp(max=1000.0)
+                # Adjust x_scale to maintain proper scaling
+                x_scale = w_scale / scaling_ratio
             
             # Safe division with numerical stability
             x_scale_safe = x_scale.clamp(min=1e-8)
@@ -158,6 +164,15 @@ class BitLinear(nn.Module):
         else:
             # During inference, use quantized weights directly
             w_q, w_scale = self._weight_quantize(self.weight)
+            
+            # Check for extreme scaling and handle safely
+            scaling_ratio = w_scale / x_scale
+            if scaling_ratio.max().item() > 1000:
+                print(f"WARNING: Extreme scaling ratio detected! Max: {scaling_ratio.max().item():.2e}")
+                # Clamp the scaling ratio to prevent numerical instability
+                scaling_ratio = scaling_ratio.clamp(max=1000.0)
+                # Adjust x_scale to maintain proper scaling
+                x_scale = w_scale / scaling_ratio
             
             # Safe division with numerical stability
             x_scale_safe = x_scale.clamp(min=1e-8)
