@@ -229,11 +229,11 @@ class BitNetConfig:
     
     def __init__(self, **kwargs):
         self.vocab_size = kwargs.get('vocab_size', 128256)
-        self.hidden_size = kwargs.get('hidden_size', 2048)
-        self.num_hidden_layers = kwargs.get('num_hidden_layers', 28)
-        self.num_attention_heads = kwargs.get('num_attention_heads', 16)
+        self.hidden_size = kwargs.get('hidden_size', 1024)  # Changed from 2048 to 1024 for H-BitLinear compatibility
+        self.num_hidden_layers = kwargs.get('num_hidden_layers', 40)  # Increased from 28 to compensate
+        self.num_attention_heads = kwargs.get('num_attention_heads', 16)  # head_dim = 1024/16 = 64 (power of 2)
         self.num_key_value_heads = kwargs.get('num_key_value_heads', 4)
-        self.intermediate_size = kwargs.get('intermediate_size', 4096)
+        self.intermediate_size = kwargs.get('intermediate_size', 2048)  # Reduced from 4096 proportionally
         self.max_position_embeddings = kwargs.get('max_position_embeddings', 1024)
         self.rms_norm_eps = kwargs.get('rms_norm_eps', 1e-5)
         self.layer_norm_eps = kwargs.get('layer_norm_eps', 1e-5)
@@ -547,15 +547,15 @@ def parse_args():
         description='2B Parameter BitNet training with H-BitLinear - H200 GPU Scaling Study'
     )
     
-    parser.add_argument('--hidden_size', type=int, default=2048,
-                       help='Hidden size (default: 2048 for ~2B parameters)')
-    parser.add_argument('--num_hidden_layers', type=int, default=28,
-                       help='Number of transformer layers (default: 28 for ~2B parameters)')
+    parser.add_argument('--hidden_size', type=int, default=1024,  # Changed to 1024 for head_dim=64 (power of 2)
+                       help='Hidden size (default: 1024 for H-BitLinear compatibility)')
+    parser.add_argument('--num_hidden_layers', type=int, default=40,  # Increased from 28 to compensate for smaller hidden_size
+                       help='Number of transformer layers (default: 40 for ~2B parameters)')
     parser.add_argument('--num_attention_heads', type=int, default=16,
-                       help='Number of attention heads (default: 16 for ~2B parameters)')
+                       help='Number of attention heads (default: 16 for head_dim=64)')
     parser.add_argument('--num_key_value_heads', type=int, default=4,
                        help='Number of key-value heads for GQA (default: 4 for ~2B parameters)')
-    parser.add_argument('--intermediate_size', type=int, default=4096,
+    parser.add_argument('--intermediate_size', type=int, default=2048,  # Reduced from 4096 proportionally
                        help='Intermediate size for feed-forward network')
     parser.add_argument('--layer_norm_eps', type=float, default=1e-5,
                        help='Layer normalization epsilon')

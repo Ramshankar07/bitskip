@@ -206,17 +206,16 @@ class BitNetForCausalLM(nn.Module):
         # Check activations (requires a forward pass)
         print("====================================\n")
 
-
 class BitNetConfig:
     """Configuration class for BitNet model."""
     
     def __init__(self, **kwargs):
         self.vocab_size = kwargs.get('vocab_size', 128256)
-        self.hidden_size = kwargs.get('hidden_size', 1536)
+        self.hidden_size = kwargs.get('hidden_size', 1024)
         self.num_hidden_layers = kwargs.get('num_hidden_layers', 20)
         self.num_attention_heads = kwargs.get('num_attention_heads', 16)
         self.num_key_value_heads = kwargs.get('num_key_value_heads', 4)
-        self.intermediate_size = kwargs.get('intermediate_size', 3072)
+        self.intermediate_size = kwargs.get('intermediate_size', 2048)
         self.max_position_embeddings = kwargs.get('max_position_embeddings', 1024)
         self.hidden_dropout_prob = kwargs.get('hidden_dropout_prob', 0.1)
         self.initializer_range = kwargs.get('initializer_range', 0.02)
