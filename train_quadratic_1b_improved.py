@@ -141,13 +141,9 @@ class BitNetForCausalLM(nn.Module):
             # Forward pass with safety wrapper
             outputs = self.safe_forward(**batch)
             
-            if outputs['loss'] is None:
-                print("WARNING: No loss computed, skipping batch")
-                return None
-                
             # Check loss validity
-            if not torch.isfinite(outputs['loss']):
-                print("WARNING: Non-finite loss, skipping batch")
+            if outputs['loss'] is None or not torch.isfinite(outputs['loss']):
+                print("WARNING: Invalid loss, skipping batch")
                 return None
                 
             # Scale loss for gradient accumulation

@@ -363,10 +363,6 @@ class BitNetModel2(nn.Module):
                         hidden_states=hidden_states,
                         layer_idx=layer_idx,
                         layer_fn=layer_fn,
-                        attention_mask=attention_mask,
-                        position_ids=position_ids,
-                        exit_layer=exit_layer,
-                        training_step=training_step,
                     )
                 except ValueError as e:
                     if "too many values to unpack" in str(e):
@@ -376,10 +372,6 @@ class BitNetModel2(nn.Module):
                             hidden_states=hidden_states,
                             layer_idx=layer_idx,
                             layer_fn=layer_fn,
-                            attention_mask=attention_mask,
-                            position_ids=position_ids,
-                            exit_layer=exit_layer,
-                            training_step=training_step,
                         )
                         print(f"DEBUG: Actual return type: {type(result)}")
                         if isinstance(result, tuple):
