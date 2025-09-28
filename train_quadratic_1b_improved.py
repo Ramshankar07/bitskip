@@ -97,7 +97,7 @@ class BitNetForCausalLM(nn.Module):
         
         # Pre-forward validation
         for key, value in kwargs.items():
-            if isinstance(value, torch.Tensor):
+            if isinstance(value, torch.Tensor) and value is not None:
                 if torch.isnan(value).any() or torch.isinf(value).any():
                     print(f"ERROR: NaN/Inf in input {key}")
                     # Return safe dummy output
@@ -117,7 +117,7 @@ class BitNetForCausalLM(nn.Module):
                 print("ERROR: Non-finite loss detected")
                 output['loss'] = torch.tensor(0.0, device=output['logits'].device, requires_grad=True)
                 
-            if torch.isnan(output['logits']).any() or torch.isinf(output['logits']).any():
+            if output['logits'] is not None and (torch.isnan(output['logits']).any() or torch.isinf(output['logits']).any()):
                 print("ERROR: Non-finite logits detected")
                 # Create safe logits
                 output['logits'] = torch.zeros_like(output['logits'])
@@ -708,7 +708,7 @@ def main():
                     loss = outputs['loss']
                     
                     # Check for NaN/Inf in loss
-                    if torch.isnan(loss).any().item() or torch.isinf(loss).any().item() or loss.item() > 100:
+                    if loss is not None and (torch.isnan(loss).any().item() or torch.isinf(loss).any().item() or loss.item() > 100):
                         logger.error(f"🚨 NaN/Inf/Extreme loss detected at step {step}: {loss.item()}")
                         logger.error("Running emergency recovery...")
                         
@@ -787,7 +787,7 @@ def main():
                 
                 # Quick check for NaN/Inf in parameters
                 for name, param in model.named_parameters():
-                    if torch.isnan(param).any().item() or torch.isinf(param).any().item():
+                    if param is not None and (torch.isnan(param).any().item() or torch.isinf(param).any().item()):
                         logger.error(f"🚨 NaN/Inf detected in {name} at step {step}")
                         corruption_found = True
                         break

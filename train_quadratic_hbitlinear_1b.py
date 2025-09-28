@@ -710,7 +710,7 @@ def main():
                     loss = outputs['loss']
                     
                     # Check for NaN/Inf in loss
-                    if torch.isnan(loss).any().item() or torch.isinf(loss).any().item() or loss.item() > 100:
+                    if loss is not None and (torch.isnan(loss).any().item() or torch.isinf(loss).any().item() or loss.item() > 100):
                         logger.error(f"🚨 NaN/Inf/Extreme loss detected at step {step}: {loss.item()}")
                         logger.error("Running emergency recovery...")
                         
@@ -789,7 +789,7 @@ def main():
                 
                 # Quick check for NaN/Inf in parameters
                 for name, param in model.named_parameters():
-                    if torch.isnan(param).any().item() or torch.isinf(param).any().item():
+                    if param is not None and (torch.isnan(param).any().item() or torch.isinf(param).any().item()):
                         logger.error(f"🚨 NaN/Inf detected in {name} at step {step}")
                         corruption_found = True
                         break
