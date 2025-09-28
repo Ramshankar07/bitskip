@@ -287,8 +287,7 @@ class BitNetModel2(nn.Module):
         training_step: Optional[int] = None,
         labels: Optional[torch.LongTensor] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[List[Tuple[torch.FloatTensor]]] = None,  # NEW
-        return_quantization_info: bool = False,  # NEW: for joint loss computation
+        past_key_values: Optional[List[Tuple[torch.FloatTensor]]] = None,  # NEW9
     ) -> Union[Tuple, Dict]:
         """
         Forward pass of the model.
@@ -361,7 +360,6 @@ class BitNetModel2(nn.Module):
                     layer_past=layer_past[layer_idx] if layer_past is not None else None,
                     use_cache=use_cache,
                     position_ids=position_ids,
-                    cache_position=cache_position,
                     exit_layer=exit_layer,
                     training_step=training_step,
                 )
@@ -434,11 +432,6 @@ class BitNetModel2(nn.Module):
             if not output_hidden_states:
                 all_hidden_states = None
 
-            # Collect quantization information if requested
-            quantization_info = None
-            if return_quantization_info:
-                quantization_info = self.collect_quantization_losses()
-
             # Create the output object
             output = CausalLMOutputWithPast(
                 loss=loss,
@@ -447,9 +440,6 @@ class BitNetModel2(nn.Module):
                 past_key_values=None  # We don't use KV cache in this implementation
             )
             
-            # Add quantization info as an attribute if requested
-            if return_quantization_info and quantization_info is not None:
-                output.quantization_info = quantization_info
             
             return output
     
