@@ -31,25 +31,25 @@ class BitTransformerBlock2(nn.Module):
         self.self_attn = BitNetGQA2(
             hidden_size=config.hidden_size,
             num_heads=config.num_attention_heads,
-            num_kv_heads=config.num_key_value_heads,
-            dropout=config.attention_probs_dropout_prob,
+            num_kv_heads=getattr(config, 'num_key_value_heads', getattr(config, 'num_kv_heads', 4)),
+            dropout=getattr(config, 'attention_probs_dropout_prob', getattr(config, 'attention_dropout', 0.1)),
             activation_bits=self.activation_bits,
-            weight_bits=config.weight_bits
+            weight_bits=getattr(config, 'weight_bits', 2)
         )
         self.self_attn_norm = SublayerNormWithResidual(
             hidden_size=config.hidden_size,
-            eps=config.layer_norm_eps
+            eps=getattr(config, 'layer_norm_eps', getattr(config, 'rms_norm_eps', 1e-5))
         )
         
         # Feed-forward with SublayerNorm
         self.feed_forward = BitFeedForward2(config)
         self.feed_forward_norm = SublayerNormWithResidual(
             hidden_size=config.hidden_size,
-            eps=config.layer_norm_eps
+            eps=getattr(config, 'layer_norm_eps', getattr(config, 'rms_norm_eps', 1e-5))
         )
         
         # Dropout
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.dropout = nn.Dropout(getattr(config, 'hidden_dropout_prob', 0.1))
     
     
     
@@ -61,7 +61,6 @@ class BitTransformerBlock2(nn.Module):
         use_cache: bool = False,
         position_ids: Optional[torch.Tensor] = None,
         cache_position: Optional[torch.Tensor] = None,
-        return_quantization_info: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]], Tuple[torch.Tensor, Dict], Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor], Dict]]:
         """
         Forward pass of the transformer block.
@@ -128,7 +127,7 @@ class BitTransformerBlock2(nn.Module):
             residual = hidden_states
             
             # Feed forward
-            ff_output = self.feed_forward(hidden_states, return_quantization_info=return_quantization_info)
+            ff_output = self.feed_forward(hidden_states)
             
             
             
