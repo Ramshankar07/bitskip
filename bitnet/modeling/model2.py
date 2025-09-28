@@ -63,7 +63,7 @@ def compute_early_exit_loss_per_layer(
     active_targets = target_ids[active_mask]
     logits = lm_head(active_states)
     
-    if torch.isnan(logits).any().item() or torch.isinf(logits).any().item():
+    if logits is not None and (torch.isnan(logits).any().item() or torch.isinf(logits).any().item()):
         print(f"ERROR: NaN/Inf detected in early exit logits for layer {layer_idx}!")
         return None
     
@@ -73,7 +73,7 @@ def compute_early_exit_loss_per_layer(
         reduction='mean'
     )
     
-    if torch.isnan(loss).any().item() or torch.isinf(loss).any().item():
+    if loss is not None and (torch.isnan(loss).any().item() or torch.isinf(loss).any().item()):
         print(f"ERROR: NaN/Inf detected in early exit loss for layer {layer_idx}!")
         return None
     
@@ -107,13 +107,13 @@ def compute_early_exit_loss(
             continue
             
         # Check for NaN in hidden states
-        if torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any():
+        if hidden_states is not None and (torch.isnan(hidden_states).any() or torch.isinf(hidden_states).any()):
             continue
             
         logits = lm_head(hidden_states)
         
         # Comprehensive NaN check
-        if (torch.isnan(logits).any() or torch.isinf(logits).any() or 
+        if logits is not None and (torch.isnan(logits).any() or torch.isinf(logits).any() or 
             logits.abs().max() > 1e6):  # Also check for extreme values
             continue
         
@@ -334,7 +334,7 @@ class BitNetModel2(nn.Module):
             position_embeddings = self.embed_positions(position_ids)
             hidden_states = inputs_embeds + position_embeddings
             
-            if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
+            if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
                 print(f"ERROR: NaN/Inf detected in hidden_states after embeddings!")
             
             # Initialize layer outputs
@@ -343,7 +343,7 @@ class BitNetModel2(nn.Module):
             
             # Process each layer
             for layer_idx in range(self.config.num_hidden_layers):
-                if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
+                if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
                     print(f"ERROR: NaN/Inf detected in hidden_states before layer {layer_idx}!")
                     break
                 
@@ -385,7 +385,7 @@ class BitNetModel2(nn.Module):
                     else:
                         raise e
                 
-                if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
+                if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
                     print(f"ERROR: NaN/Inf detected in hidden_states after layer {layer_idx}!")
                     break  # Stop processing to prevent further NaN propagation
                 
@@ -419,7 +419,7 @@ class BitNetModel2(nn.Module):
             # Compute logits
             logits = self.lm_head(hidden_states)
             
-            if torch.isnan(logits).any().item() or torch.isinf(logits).any().item():
+            if logits is not None and (torch.isnan(logits).any().item() or torch.isinf(logits).any().item()):
                 print(f"ERROR: NaN/Inf detected in logits!")
             
             # Compute loss if labels are provided
@@ -431,7 +431,7 @@ class BitNetModel2(nn.Module):
                 loss_fct = nn.CrossEntropyLoss()
                 loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
                 
-                if torch.isnan(loss).any().item() or torch.isinf(loss).any().item():
+                if loss is not None and (torch.isnan(loss).any().item() or torch.isinf(loss).any().item()):
                     print(f"ERROR: NaN/Inf detected in main loss!")
                 
                 # Add early exit losses if any and early exit is enabled

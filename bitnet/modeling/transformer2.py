@@ -69,6 +69,7 @@ class BitTransformerBlock2(nn.Module):
         layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         use_cache: bool = False,
         position_ids: Optional[torch.Tensor] = None,
+        cache_position: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]], Tuple[torch.Tensor, Dict], Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor], Dict]]:
         """
         Forward pass of the transformer block.
@@ -91,10 +92,9 @@ class BitTransformerBlock2(nn.Module):
             attn_outputs = self.self_attn(
                 hidden_states,
                 attention_mask=attention_mask,
-                past_key_value=layer_past,
+                layer_past=layer_past,
                 use_cache=use_cache,
                 position_ids=position_ids,
-                cache_position=cache_position
             )
             
             # Handle both cases: with and without cached key-values
@@ -106,7 +106,7 @@ class BitTransformerBlock2(nn.Module):
                 attn_output = attn_outputs
                 present_key_value = None
             
-            if torch.isnan(attn_output).any().item() or torch.isinf(attn_output).any().item():
+            if attn_output is not None and (torch.isnan(attn_output).any().item() or torch.isinf(attn_output).any().item()):
                 print(f"ERROR: NaN/Inf detected in attn_output!")
             
             # Apply dropout to attention output
@@ -115,7 +115,7 @@ class BitTransformerBlock2(nn.Module):
             # Apply sublayer norm with residual connection
             hidden_states = self.self_attn_norm(attn_output, residual)
             
-            if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
+            if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
                 print(f"ERROR: NaN/Inf detected in hidden_states after self_attn_norm!")
             
             # Store new residual
@@ -124,7 +124,7 @@ class BitTransformerBlock2(nn.Module):
             # Feed forward
             ff_output = self.feed_forward(hidden_states)
             
-            if torch.isnan(ff_output).any().item() or torch.isinf(ff_output).any().item():
+            if ff_output is not None and (torch.isnan(ff_output).any().item() or torch.isinf(ff_output).any().item()):
                 print(f"ERROR: NaN/Inf detected in ff_output!")
             
             # Apply dropout to feed-forward output
@@ -133,7 +133,7 @@ class BitTransformerBlock2(nn.Module):
             # Apply sublayer norm with residual connection
             hidden_states = self.feed_forward_norm(ff_output, residual)
             
-            if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
+            if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
                 print(f"ERROR: NaN/Inf detected in final hidden_states!")
             
             
