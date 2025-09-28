@@ -157,7 +157,7 @@ class BitLinear(nn.Module):
             x_scale_safe = x_scale.clamp(min=1e-8)
             output = F.linear(x_q, self.weight, self.bias) / x_scale_safe
             
-            if torch.isnan(output).any().item() or torch.isinf(output).any().item():
+            if output is not None and (torch.isnan(output).any().item() or torch.isinf(output).any().item()):
                 print(f"ERROR: NaN/Inf detected in BitLinear output before squared_relu!")
             
             self.weight.data = w_original

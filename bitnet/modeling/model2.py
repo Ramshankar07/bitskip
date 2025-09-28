@@ -264,13 +264,20 @@ class BitNetModel2(nn.Module):
             
             if self.gradient_checkpointing and bool(getattr(self, 'training', False)):
                 # Use gradient checkpointing with explicit use_reentrant=False
-                return checkpoint(
+                result = checkpoint(
                     layer,
                     hidden_states,
                     use_reentrant=False,
                     **layer_kwargs
                 )
-            return layer(hidden_states, **layer_kwargs)
+            else:
+                result = layer(hidden_states, **layer_kwargs)
+            
+            # Always return just the hidden states for layer skipping compatibility
+            if isinstance(result, tuple):
+                return result[0]  # Return only the hidden states
+            else:
+                return result
             
         return layer_fn
     
