@@ -65,36 +65,28 @@ class BitNetGQA2(nn.Module):
         self.q_proj = HBitLinear(
             in_features=hidden_size,
             out_features=hidden_size,
-            bias=False,
-            weight_bits=weight_bits,
-            activation_bits=activation_bits
+            bias=False
         )
         
         # Key projection using H-BitLinear (smaller output for GQA)
         self.k_proj = HBitLinear(
             in_features=hidden_size,
             out_features=num_kv_heads * self.head_dim,
-            bias=False,
-            weight_bits=weight_bits,
-            activation_bits=activation_bits
+            bias=False
         )
         
         # Value projection using H-BitLinear (smaller output for GQA)
         self.v_proj = HBitLinear(
             in_features=hidden_size,
             out_features=num_kv_heads * self.head_dim,
-            bias=False,
-            weight_bits=weight_bits,
-            activation_bits=activation_bits
+            bias=False
         )
         
         # Output projection using H-BitLinear
         self.o_proj = HBitLinear(
             in_features=hidden_size,
             out_features=hidden_size,
-            bias=False,
-            weight_bits=weight_bits,
-            activation_bits=activation_bits
+            bias=False
         )
         
         # RoPE for positional encoding
