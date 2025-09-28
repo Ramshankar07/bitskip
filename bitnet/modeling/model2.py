@@ -364,7 +364,6 @@ class BitNetModel2(nn.Module):
                     cache_position=cache_position,
                     exit_layer=exit_layer,
                     training_step=training_step,
-                    return_quantization_info=return_quantization_info
                 )
                 
                 if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():

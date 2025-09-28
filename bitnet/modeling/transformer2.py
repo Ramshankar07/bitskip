@@ -92,41 +92,31 @@ class BitTransformerBlock2(nn.Module):
             
             
             
-            # Handle attention outputs (could be 2 or 3 elements depending on quantization_info)
+            # Handle attention outputs
             if isinstance(attn_outputs, tuple):
                 if len(attn_outputs) == 2:
                     # When use_cache=True, attention returns (output, cached_keys_values)
                     attn_output, present_key_value = attn_outputs
-                elif len(attn_outputs) == 3:
-                    # When use_cache=True and return_quantization_info=True
-                    attn_output, present_key_value, attn_quant_info = attn_outputs
-                    
                 else:
-                    # When use_cache=False and return_quantization_info=True
-                    attn_output, attn_quant_info = attn_outputs
-                    
+                    # When use_cache=False, attention returns just output
+                    attn_output = attn_outputs[0]
                     present_key_value = None
             else:
-                # When use_cache=False and return_quantization_info=False
+                # When use_cache=False, attention returns just output
                 attn_output = attn_outputs
                 present_key_value = None
             
             if torch.isnan(attn_output).any().item() or torch.isinf(attn_output).any().item():
                 print(f"ERROR: NaN/Inf detected in attn_output!")
             
-            # Apply dropout to attention output
             attn_output = self.dropout(attn_output)
             
-            # Apply sublayer norm with residual connection
             hidden_states = self.self_attn_norm(attn_output, residual)
             
             if torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item():
                 print(f"ERROR: NaN/Inf detected in hidden_states after self_attn_norm!")
             
-            # Store new residual
             residual = hidden_states
-            
-            # Feed forward
             ff_output = self.feed_forward(hidden_states)
             
             
