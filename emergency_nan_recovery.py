@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import logging
 import os
+import math
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -161,7 +162,7 @@ def emergency_fix_embeddings(model, vocab_size=None):
 
 def emergency_fix_model(model, config=None):
     """
-    Complete emergency fix for a corrupted model.
+    Complete emergency fix for a corrupted model with enhanced BitLinear support.
     """
     print("\n🚑 EMERGENCY MODEL RECOVERY")
     print("="*80)
@@ -179,13 +180,32 @@ def emergency_fix_model(model, config=None):
             if 'position' in name.lower() and isinstance(module, nn.Embedding):
                 if torch.isnan(module.weight).any().item() or torch.isinf(module.weight).any().item():
                     print(f"🔧 Fixing position embeddings '{name}'...")
-                    # Reinitialize with sinusoidal pattern or random
                     nn.init.normal_(module.weight, mean=0.0, std=0.02)
                     fixes_applied.append(f"Fixed position embeddings {name}")
         
-        # Step 3: Fix linear layers
+        # Step 3: Fix BitLinear layers (most critical for BitNet)
         for name, module in model.named_modules():
-            if isinstance(module, nn.Linear):
+            if hasattr(module, '__class__') and 'BitLinear' in module.__class__.__name__:
+                if hasattr(module, 'weight') and module.weight is not None:
+                    weight = module.weight
+                    if torch.isnan(weight).any().item() or torch.isinf(weight).any().item():
+                        print(f"🔧 Fixing BitLinear layer '{name}'...")
+                        # Use conservative initialization for BitLinear
+                        nn.init.kaiming_uniform_(weight, a=math.sqrt(5))
+                        weight.data *= 0.1  # Scale down to prevent extreme quantization
+                        
+                        if hasattr(module, 'bias') and module.bias is not None:
+                            nn.init.zeros_(module.bias)
+                        
+                        # Fix weight_scale buffer if it exists
+                        if hasattr(module, 'weight_scale'):
+                            module.weight_scale.fill_(1.0)
+                        
+                        fixes_applied.append(f"Fixed BitLinear {name}")
+        
+        # Step 4: Fix regular linear layers
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Linear) and 'BitLinear' not in module.__class__.__name__:
                 if hasattr(module, 'weight') and module.weight is not None:
                     weight = module.weight
                     if torch.isnan(weight).any().item() or torch.isinf(weight).any().item():
@@ -195,7 +215,7 @@ def emergency_fix_model(model, config=None):
                             nn.init.zeros_(module.bias)
                         fixes_applied.append(f"Fixed linear layer {name}")
         
-        # Step 4: Fix LayerNorm parameters
+        # Step 5: Fix LayerNorm parameters
         for name, module in model.named_modules():
             if isinstance(module, nn.LayerNorm):
                 if torch.isnan(module.weight).any().item() or torch.isinf(module.weight).any().item():
@@ -204,7 +224,7 @@ def emergency_fix_model(model, config=None):
                     module.bias.zero_()
                     fixes_applied.append(f"Fixed LayerNorm {name}")
         
-        # Step 5: Fix buffers (especially weight_scale in BitLinear)
+        # Step 6: Fix buffers (especially weight_scale in BitLinear)
         for name, buffer in model.named_buffers():
             if buffer.dtype in [torch.float16, torch.float32, torch.float64]:
                 if torch.isnan(buffer).any().item() or torch.isinf(buffer).any().item():
@@ -218,6 +238,35 @@ def emergency_fix_model(model, config=None):
                     else:
                         buffer.zero_()
                     fixes_applied.append(f"Fixed buffer {name}")
+        
+        # Step 7: Aggressive fix for severely corrupted models
+        corruption_count = 0
+        for name, param in model.named_parameters():
+            if torch.isnan(param).any().item() or torch.isinf(param).any().item():
+                corruption_count += 1
+        
+        if corruption_count > 100:  # Severe corruption
+            print(f"\n🚨 SEVERE CORRUPTION DETECTED ({corruption_count} parameters)")
+            print("Applying aggressive recovery...")
+            
+            # Reinitialize ALL parameters
+            for name, module in model.named_modules():
+                if hasattr(module, 'reset_parameters'):
+                    try:
+                        module.reset_parameters()
+                        print(f"Reset {name}")
+                        fixes_applied.append(f"Reset {name}")
+                    except Exception as e:
+                        print(f"Failed to reset {name}: {e}")
+            
+            # Special handling for BitLinear layers
+            for name, module in model.named_modules():
+                if hasattr(module, '__class__') and 'BitLinear' in module.__class__.__name__:
+                    if hasattr(module, 'weight'):
+                        nn.init.kaiming_uniform_(module.weight, a=math.sqrt(5))
+                        module.weight.data *= 0.1
+                    if hasattr(module, 'weight_scale'):
+                        module.weight_scale.fill_(1.0)
     
     print(f"\n✅ Applied {len(fixes_applied)} fixes")
     for fix in fixes_applied[:10]:  # Show first 10 fixes
@@ -325,9 +374,16 @@ def save_emergency_checkpoint(model, path="emergency_checkpoint.pt"):
 
 
 # MAIN RECOVERY FUNCTION
-def recover_from_nan(model, optimizer=None, grad_scaler=None, config=None):
+def recover_from_nan(model, optimizer=None, grad_scaler=None, config=None, aggressive=False):
     """
     Complete recovery procedure from NaN corruption.
+    
+    Args:
+        model: The corrupted model
+        optimizer: Current optimizer (optional)
+        grad_scaler: Current gradient scaler (optional)
+        config: Model config (optional)
+        aggressive: If True, use aggressive recovery for severe corruption
     
     Usage:
         model, optimizer, grad_scaler = recover_from_nan(model, optimizer, grad_scaler, config)
@@ -339,23 +395,47 @@ def recover_from_nan(model, optimizer=None, grad_scaler=None, config=None):
     # Step 1: Diagnose
     corruption = diagnose_model_corruption(model)
     
+    # Check if we need aggressive recovery
+    total_corrupted = len(corruption['parameters']) + len(corruption['embeddings'])
+    if total_corrupted > 50 or aggressive:
+        print(f"\n🚨 SEVERE CORRUPTION DETECTED ({total_corrupted} corrupted components)")
+        print("Using AGGRESSIVE recovery mode...")
+        aggressive = True
+    
     # Step 2: Fix model
     fixes = emergency_fix_model(model, config)
     
     # Step 3: Verify
     is_healthy = verify_model_health(model)
     
-    if not is_healthy:
-        print("\n⚠️ Model couldn't be fully recovered. Attempting deeper fix...")
+    if not is_healthy and not aggressive:
+        print("\n⚠️ Standard recovery failed. Switching to AGGRESSIVE mode...")
+        aggressive = True
         
-        # Try more aggressive fixes
-        for name, module in model.named_modules():
-            if hasattr(module, 'reset_parameters'):
-                try:
-                    module.reset_parameters()
-                    print(f"Reset {name}")
-                except:
-                    pass
+        # Aggressive recovery: reinitialize everything
+        print("\n🔥 AGGRESSIVE RECOVERY: Reinitializing entire model...")
+        with torch.no_grad():
+            # Reinitialize all parameters
+            for name, param in model.named_parameters():
+                if param.dim() >= 2:
+                    # Weight matrices
+                    nn.init.kaiming_uniform_(param, a=math.sqrt(5))
+                    param.data *= 0.1  # Conservative scaling
+                else:
+                    # Bias vectors
+                    nn.init.zeros_(param)
+            
+            # Fix all buffers
+            for name, buffer in model.named_buffers():
+                if buffer.dtype in [torch.float16, torch.float32, torch.float64]:
+                    if 'weight_scale' in name:
+                        buffer.fill_(1.0)
+                    elif 'running_mean' in name:
+                        buffer.zero_()
+                    elif 'running_var' in name:
+                        buffer.fill_(1.0)
+                    else:
+                        buffer.zero_()
         
         # Verify again
         is_healthy = verify_model_health(model)
@@ -363,17 +443,25 @@ def recover_from_nan(model, optimizer=None, grad_scaler=None, config=None):
     # Step 4: Reset optimizer and scaler
     if optimizer is not None and grad_scaler is not None:
         learning_rate = optimizer.param_groups[0]['lr']
+        # Use even more conservative learning rate for aggressive recovery
+        if aggressive:
+            learning_rate *= 0.01  # 1% of original
         optimizer, grad_scaler = reset_optimizer_and_scaler(model, learning_rate)
     
     # Step 5: Save checkpoint
-    save_emergency_checkpoint(model, "emergency_recovery.pt")
+    checkpoint_name = "emergency_recovery_aggressive.pt" if aggressive else "emergency_recovery.pt"
+    save_emergency_checkpoint(model, checkpoint_name)
     
     print("\n" + "="*80)
     if is_healthy:
         print("✅ RECOVERY SUCCESSFUL - You can resume training")
-        print("⚠️ Recommend using lower learning rate and watching for instability")
+        if aggressive:
+            print("⚠️ AGGRESSIVE recovery used - model was severely corrupted")
+            print("⚠️ Recommend using very low learning rate and monitoring closely")
+        else:
+            print("⚠️ Recommend using lower learning rate and watching for instability")
     else:
-        print("❌ RECOVERY FAILED - Model needs reinitialization")
+        print("❌ RECOVERY FAILED - Model needs complete reinitialization")
         print("💡 Try loading a previous checkpoint or starting fresh")
     print("="*80)
     

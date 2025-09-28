@@ -597,9 +597,10 @@ def main():
                         logger.error(f"🚨 NaN/Inf/Extreme loss detected at step {step}: {loss.item()}")
                         logger.error("Running emergency recovery...")
                         
-                        # Run emergency recovery
+                        # Run emergency recovery with aggressive mode for extreme cases
+                        aggressive = loss.item() > 1000 or step > 100  # Use aggressive for extreme loss or later in training
                         model, optimizer, grad_scaler = recover_from_nan(
-                            model, optimizer, grad_scaler, config
+                            model, optimizer, grad_scaler, config, aggressive=aggressive
                         )
                         
                         # Skip this iteration
@@ -674,8 +675,9 @@ def main():
                 
                 if corruption_found:
                     logger.error("Running emergency recovery...")
+                    # Use aggressive recovery for periodic checks since corruption was found
                     model, optimizer, grad_scaler = recover_from_nan(
-                        model, optimizer, grad_scaler, config
+                        model, optimizer, grad_scaler, config, aggressive=True
                     )
                     logger.info("Recovery completed, continuing training...")
             
