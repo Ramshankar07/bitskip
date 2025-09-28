@@ -128,7 +128,7 @@ class BitLinear(nn.Module):
         
 
         
-        if bool(self.training):
+        if self.training if isinstance(self.training, bool) else bool(self.training):
             # During training, use Straight-Through Estimator for backprop
             w_q, w_scale = self._weight_quantize(self.weight)
             w_original = self.weight.data.clone()
