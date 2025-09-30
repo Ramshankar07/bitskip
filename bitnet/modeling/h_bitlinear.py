@@ -5,42 +5,13 @@ from typing import Optional, Tuple, Dict, Any, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from .kernels import fwht
 
 
 
 def hadamard_transform(x: torch.Tensor) -> torch.Tensor:
-    """
-    Apply Hadamard transform recursively.
-    
-    Args:
-        x: Input tensor
-        
-    Returns:
-        Transformed tensor with same shape as input
-    """
-    # Prefer CUDA kernel if available
-    try:
-        from .kernels import fwht as fwht_cuda, is_available as kernels_available
-        if x.is_cuda and kernels_available():
-            return fwht_cuda(x)
-    except Exception:
-        pass
-
-    # Fallback: iterative FWHT on last dimension
-    original_shape = x.shape
-    n = x.shape[-1]
-    if (n & (n - 1)) != 0:
-        raise ValueError(f"FWHT requires power-of-two length, got {n}")
-    y = x.contiguous().view(-1, n)
-    h = 1
-    while h < n:
-        for start in range(0, n, 2 * h):
-            a = y[:, start:start + h]
-            b = y[:, start + h:start + 2 * h]
-            y[:, start:start + h] = a + b
-            y[:, start + h:start + 2 * h] = a - b
-        h <<= 1
-    return y.view(original_shape)
+    """Apply Hadamard transform with CUDA acceleration (falls back to CPU)."""
+    return fwht(x)
 
 
 class HBitLinear(nn.Module):

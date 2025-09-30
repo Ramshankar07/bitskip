@@ -50,12 +50,13 @@ def fwht(x: torch.Tensor) -> torch.Tensor:
     h = 1
     while h < n:
         # Perform butterflies for blocks of size 2h
-        y = y.view(-1, n)
         for start in range(0, n, 2 * h):
             a = y[:, start:start + h]
             b = y[:, start + h:start + 2 * h]
-            y[:, start:start + h] = a + b
-            y[:, start + h:start + 2 * h] = a - b
+            sum_ab = a + b
+            diff_ab = a - b
+            y[:, start:start + h] = sum_ab
+            y[:, start + h:start + 2 * h] = diff_ab
         h <<= 1
     return y.view(x.shape)
 
