@@ -3,9 +3,12 @@ Inference engine for BitNet model with optimized generation.
 """
 
 from typing import Dict, List, Optional, Union
+import os
+import json
 
 import torch
 from transformers import AutoTokenizer
+from safetensors.torch import load_file as load_safetensors
 
 from ..modeling.model import BitNetModel
 from ..modeling.model2 import BitNetModel2
@@ -39,20 +42,57 @@ class BitNetInferenceEngine:
         # Configure layer skipping for inference
         self.config.layer_skip_strategy = "fixed"  # Using fixed pattern is faster for inference
         
-        # Load checkpoint
-        try:
-            # First try with weights_only=True (safer)
-            checkpoint = torch.load(model_path, map_location=self.device, weights_only=True)
-        except Exception as e:
-            # If that fails, try with weights_only=False and add safe globals
-            import torch.serialization
-            torch.serialization.add_safe_globals(['numpy._core.multiarray.scalar'])
-            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+        # Resolve model file if a directory is provided
+        resolved_path = model_path
+        if os.path.isdir(model_path):
+            safetensors_path = os.path.join(model_path, "model.safetensors")
+            pt_path = os.path.join(model_path, "model.pt")
+            if os.path.exists(safetensors_path):
+                resolved_path = safetensors_path
+            elif os.path.exists(pt_path):
+                resolved_path = pt_path
+            else:
+                raise FileNotFoundError(f"No checkpoint found in directory: {model_path}")
+        
+        # Attempt to read config.json from directory (if available)
+        model_dir = os.path.dirname(resolved_path) if os.path.isfile(resolved_path) else resolved_path
+        config_json_path = os.path.join(model_dir, "config.json")
+        if os.path.exists(config_json_path):
+            try:
+                with open(config_json_path, 'r') as f:
+                    config_dict_from_json = json.load(f)
+                valid_keys = set(DefaultConfig.__dataclass_fields__.keys())
+                filtered_config = {k: v for k, v in config_dict_from_json.items() if k in valid_keys}
+                cfg_obj = DefaultConfig.from_dict(filtered_config)
+                self.config = cfg_obj
+                print(f"Loaded config.json: hidden_size={self.config.hidden_size}, vocab_size={self.config.vocab_size}")
+            except Exception as e:
+                print(f"Warning: Failed to parse config.json at {config_json_path}: {e}")
+        
+        # Load checkpoint (.safetensors or .pt)
+        if resolved_path.endswith('.safetensors'):
+            checkpoint = load_safetensors(resolved_path, device=self.device)
+        else:
+            try:
+                # First try with weights_only=True (safer)
+                checkpoint = torch.load(resolved_path, map_location=self.device, weights_only=True)
+            except Exception as e:
+                # If that fails, try with weights_only=False and add safe globals
+                import torch.serialization
+                torch.serialization.add_safe_globals(['numpy._core.multiarray.scalar'])
+                checkpoint = torch.load(resolved_path, map_location=self.device, weights_only=False)
         
         # Determine model type if auto
         if model_type == "auto":
             # Check if it's a BitNetModel2 checkpoint by looking for specific keys
-            state_dict = checkpoint.get("model_state_dict", checkpoint)
+            raw_state_dict = checkpoint.get("model_state_dict", checkpoint)
+            # Normalize possible wrappers (e.g., 'model.' or 'module.' prefixes)
+            def _strip_prefix(name: str) -> str:
+                for prefix in ("model.", "module."):
+                    if name.startswith(prefix):
+                        return name[len(prefix):]
+                return name
+            state_dict = { _strip_prefix(k): v for k, v in raw_state_dict.items() }
             if any("h_bitlinear" in key for key in state_dict.keys()):
                 self.model_type = "bitnet2"
                 print("Detected BitNetModel2 checkpoint")
@@ -60,25 +100,33 @@ class BitNetInferenceEngine:
                 self.model_type = "bitnet"
                 print("Detected BitNetModel checkpoint")
         
-        # Load config from checkpoint if present, and convert to DefaultConfig if needed
-        config_dict = checkpoint.get("config", None)
-        if config_dict is not None and isinstance(config_dict, dict):
-            # Only keep keys that are valid DefaultConfig fields
+        # Load config from checkpoint blob if present, otherwise keep existing (json/default)
+        if isinstance(checkpoint, dict) and 'config' in checkpoint and isinstance(checkpoint['config'], dict):
+            config_dict = checkpoint['config']
             valid_keys = set(DefaultConfig.__dataclass_fields__.keys())
             filtered_config = {k: v for k, v in config_dict.items() if k in valid_keys}
             config = DefaultConfig.from_dict(filtered_config)
             print(f"Loaded config from checkpoint: hidden_size={config.hidden_size}, vocab_size={config.vocab_size}")
         else:
-            config = DefaultConfig()
-            print("No config found in checkpoint, using default config")
+            # Start from self.config which may have been loaded from config.json
+            config = self.config
+            print("Using existing config (from config.json or defaults)")
         
         # Always infer model architecture from state dict to ensure compatibility
-        state_dict = checkpoint.get("model_state_dict", checkpoint)
+        raw_state_dict = checkpoint.get("model_state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+        # Normalize common prefixes from training wrappers for compatibility
+        def _strip_prefix(name: str) -> str:
+            for prefix in ("model.", "module."):
+                if name.startswith(prefix):
+                    return name[len(prefix):]
+            return name
+        state_dict = { _strip_prefix(k): v for k, v in raw_state_dict.items() }
         if "embed_tokens.weight" in state_dict:
             vocab_size, hidden_size = state_dict["embed_tokens.weight"].shape
             config.vocab_size = vocab_size
             config.hidden_size = hidden_size
-            config.max_position_embeddings = state_dict["embed_positions.weight"].shape[0]
+            if "embed_positions.weight" in state_dict:
+                config.max_position_embeddings = state_dict["embed_positions.weight"].shape[0]
             print(f"Updated config from state dict: hidden_size={config.hidden_size}, vocab_size={config.vocab_size}")
         
         # Set other required config parameters if not present
@@ -116,9 +164,13 @@ class BitNetInferenceEngine:
         if self.model_type == "bitnet2":
             self.model = BitNetModel2(config)
             print("Initialized BitNetModel2 (with H-BitLinear layers)")
+            # BitNetModel2 supports KV cache in generation
+            self.supports_kv_cache = True
         else:
             self.model = BitNetModel(config)
             print("Initialized BitNetModel")
+            # The current BitNetModel implementation does not return/use KV cache
+            self.supports_kv_cache = False
         
         # Print model and checkpoint shapes for validation
         print("[Validation] Model shapes:")
@@ -127,15 +179,16 @@ class BitNetInferenceEngine:
         print("  lm_head.weight:", self.model.lm_head.weight.shape)
         print("[Validation] Checkpoint shapes:")
         
-        # Get state dict from checkpoint
-        state_dict = checkpoint.get("model_state_dict", checkpoint)
+        # Get state dict from checkpoint (normalized)
+        state_dict = state_dict
         print("  embed_tokens.weight:", state_dict["embed_tokens.weight"].shape)
-        print("  embed_positions.weight:", state_dict["embed_positions.weight"].shape)
+        if "embed_positions.weight" in state_dict:
+            print("  embed_positions.weight:", state_dict["embed_positions.weight"].shape)
         print("  lm_head.weight:", state_dict["lm_head.weight"].shape)
         
         # Check for shape mismatches
         if (self.model.embed_tokens.weight.shape != state_dict["embed_tokens.weight"].shape or
-            self.model.embed_positions.weight.shape != state_dict["embed_positions.weight"].shape or
+            ("embed_positions.weight" in state_dict and self.model.embed_positions.weight.shape != state_dict["embed_positions.weight"].shape) or
             self.model.lm_head.weight.shape != state_dict["lm_head.weight"].shape):
             raise ValueError("Model and checkpoint shapes do not match! Please ensure you are using the same config as during training.")
         
@@ -178,24 +231,45 @@ class BitNetInferenceEngine:
             seen_tokens = set()
             with torch.autograd.profiler.record_function("Engine.generation_loop"):
                 for step in range(actual_max_length):
-                    if step == 0:
+                    # Decide input feeding strategy based on KV cache support
+                    if not self.supports_kv_cache:
+                        # Model does not support KV cache (e.g., BitNetModel from model.py)
+                        # Always feed the full sequence and full position ids/mask
                         model_inputs = generated
-                        current_position_ids = torch.arange(input_length, dtype=torch.long, device=self.device).unsqueeze(0)
+                        seq_len = model_inputs.shape[1]
+                        current_position_ids = torch.arange(seq_len, dtype=torch.long, device=self.device).unsqueeze(0)
+                        current_attention_mask = torch.ones_like(model_inputs)
                     else:
-                        model_inputs = generated[:, -1:]
-                        current_position_ids = torch.tensor([[input_length + step - 1]], dtype=torch.long, device=self.device)
-                    current_attention_mask = torch.ones_like(model_inputs)
+                        # KV cache-enabled path (e.g., BitNetModel2)
+                        if step == 0:
+                            model_inputs = generated
+                            current_position_ids = torch.arange(input_length, dtype=torch.long, device=self.device).unsqueeze(0)
+                        else:
+                            model_inputs = generated[:, -1:]
+                            current_position_ids = torch.tensor([[input_length + step - 1]], dtype=torch.long, device=self.device)
+                        current_attention_mask = torch.ones_like(model_inputs)
                     with torch.no_grad():
-                        outputs = self.model(
-                            input_ids=model_inputs,
-                            attention_mask=current_attention_mask,
-                            past_key_values=past_key_values,
-                            use_cache=True,
-                            output_hidden_states=True,
-                            return_dict=True,
-                            position_ids=current_position_ids
-                        )
-                        past_key_values = outputs.past_key_values
+                        if self.supports_kv_cache:
+                            outputs = self.model(
+                                input_ids=model_inputs,
+                                attention_mask=current_attention_mask,
+                                past_key_values=past_key_values,
+                                use_cache=True,
+                                output_hidden_states=True,
+                                return_dict=True,
+                                position_ids=current_position_ids
+                            )
+                            past_key_values = getattr(outputs, 'past_key_values', None)
+                        else:
+                            # Do not pass/use KV cache for models that don't support it
+                            outputs = self.model(
+                                input_ids=model_inputs,
+                                attention_mask=current_attention_mask,
+                                use_cache=False,
+                                output_hidden_states=True,
+                                return_dict=True,
+                                position_ids=current_position_ids
+                            )
                         logits = None
                         max_prob = None
                         

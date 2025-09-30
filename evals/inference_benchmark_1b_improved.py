@@ -35,7 +35,7 @@ except ImportError:
     from torch.cuda.amp import autocast
 
 # Import the improved model
-from train_quadratic_1b_improved import BitNetForCausalLM, BitNetConfig
+from bitnet.inference.engine import BitNetInferenceEngine
 
 # Load environment variables
 load_dotenv()
@@ -71,86 +71,46 @@ class InferenceBenchmark:
         )
     
     def load_model(self):
-        """Load the BitNet model and tokenizer."""
+        """Load the BitNet model and tokenizer using the unified engine."""
         self.logger.info(f"Loading model from {self.model_path}")
         
         try:
-            # Check if model_path is a directory or a file
+            # Resolve model directory and model file path
             if os.path.isfile(self.model_path):
-                # If it's a file (like model.safetensors), find the parent directory
                 model_dir = os.path.dirname(self.model_path)
+                model_file = self.model_path
                 self.logger.info(f"Model file detected, using directory: {model_dir}")
             else:
-                # If it's a directory, use it directly
                 model_dir = self.model_path
+                model_file = os.path.join(model_dir, "model.pt")
                 self.logger.info(f"Model directory detected: {model_dir}")
             
-            # Check if config.json exists in the directory
-            config_path = os.path.join(model_dir, "config.json")
-            if not os.path.exists(config_path):
-                self.logger.warning(f"config.json not found at {config_path}")
-                self.logger.info("Attempting to create a default config...")
-                
-                # Create a default config for 1B model (HF compatible format)
-                default_config = {
-                    "vocab_size": 128256,
-                    "hidden_size": 1536,
-                    "num_hidden_layers": 20,
-                    "num_attention_heads": 16,
-                    "num_key_value_heads": 4,
-                    "intermediate_size": 3072,
-                    "max_position_embeddings": 1024,
-                    "rms_norm_eps": 1e-5,
-                    "hidden_dropout_prob": 0.1,
-                    "attention_dropout": 0.1,
-                    "initializer_range": 0.02,
-                    "activation_bits": 8,
-                    "weight_bits": 2,
-                    "use_layer_skipping": True,
-                    "skip_probability": 0.1,
-                    "min_layers_to_keep": 4,
-                    "use_early_exit": False,
-                    "early_exit_threshold": 0.95,
-                    "dropout_schedule": "quadratic",
-                    "quadratic_constant": 0.3
-                }
-                
-                with open(config_path, 'w') as f:
-                    json.dump(default_config, f, indent=2)
-                self.logger.info(f"Created default config at {config_path}")
+            # Tokenizer path/name
+            tokenizer_name = os.getenv("TOKENIZER_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
             
-            # Load model
-            self.model = BitNetForCausalLM.from_pretrained(model_dir)
-            self.model.to(self.device)
-            self.model.eval()
+            # Initialize unified engine (auto-detects model vs model2)
+            self.engine = BitNetInferenceEngine(
+                model_path=model_file,
+                tokenizer_path=tokenizer_name,
+                device=self.device,
+                model_type="auto",
+            )
             
-            # Convert to FP16 for inference efficiency
+            # Expose model and tokenizer for benchmarking internals
+            self.model = self.engine.model
+            self.tokenizer = self.engine.tokenizer
+            
+            # Convert to FP16 for inference efficiency where applicable
             if torch.cuda.is_available():
                 self.model = self.model.half()
                 self.logger.info("Model converted to FP16 for inference")
             
-            # Load tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                os.getenv("TOKENIZER_NAME", "meta-llama/Meta-Llama-3-8B-Instruct"),
-                token=os.getenv("HUGGINGFACE_TOKEN"),
-                force_download=False,
-            )
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-            
-            self.logger.info("Model and tokenizer loaded successfully")
+            self.logger.info("Model and tokenizer loaded successfully via engine")
             self.logger.info(f"Model dtype: {self.model.dtype}")
             self.logger.info(f"Model device: {next(self.model.parameters()).device}")
-            
-            # Log model configuration
-            if hasattr(self.model.config, 'hidden_size'):
-                self.logger.info(f"Model config - Hidden size: {self.model.config.hidden_size}")
-                self.logger.info(f"Model config - Layers: {self.model.config.num_hidden_layers}")
-                self.logger.info(f"Model config - Attention heads: {self.model.config.num_attention_heads}")
-                self.logger.info(f"Model config - Activation bits: {getattr(self.model.config, 'activation_bits', 'N/A')}")
-                self.logger.info(f"Model config - Weight bits: {getattr(self.model.config, 'weight_bits', 'N/A')}")
-            
+        
         except Exception as e:
-            self.logger.error(f"Failed to load model: {str(e)}")
+            self.logger.error(f"Failed to load model via engine: {str(e)}")
             raise
     
     def generate_with_timing(
@@ -214,7 +174,7 @@ class InferenceBenchmark:
             token_times = []
             first_token_time = None
             
-            # Generate tokens one by one for precise timing
+            # Generate tokens one by one for precise timing (using engine's cache capability flag)
             with torch.no_grad():
                 current_inputs = inputs
                 past_key_values = None
@@ -223,28 +183,52 @@ class InferenceBenchmark:
                 for step in range(max_new_tokens):
                     step_start = time.time()
                     
-                    # Forward pass with KV cache when available and FP16 autocast
+                    # Forward pass with or without KV cache depending on model support
                     try:
                         with autocast('cuda'):
-                            if past_key_values is None:
-                                outputs = self.model(**current_inputs, use_cache=True)
+                            if getattr(self.engine, 'supports_kv_cache', False):
+                                if past_key_values is None:
+                                    outputs = self.model(**current_inputs, use_cache=True)
+                                else:
+                                    outputs = self.model(
+                                        input_ids=next_input_ids,
+                                        past_key_values=past_key_values,
+                                        use_cache=True,
+                                    )
                             else:
-                                outputs = self.model(
-                                    input_ids=next_input_ids,
-                                    past_key_values=past_key_values,
-                                    use_cache=True,
-                                )
+                                # No KV cache: feed full sequence each step, do not pass/use cache
+                                if step == 0:
+                                    outputs = self.model(**current_inputs, use_cache=False)
+                                else:
+                                    # Append last token to sequence for next step
+                                    full_input_ids = torch.cat([current_inputs.input_ids, next_input_ids], dim=1)
+                                    current_inputs = type(current_inputs)(
+                                        input_ids=full_input_ids,
+                                        attention_mask=torch.ones_like(full_input_ids),
+                                    )
+                                    outputs = self.model(**current_inputs, use_cache=False)
                     except TypeError:
                         # Fallback for older PyTorch versions
                         with autocast():
-                            if past_key_values is None:
-                                outputs = self.model(**current_inputs, use_cache=True)
+                            if getattr(self.engine, 'supports_kv_cache', False):
+                                if past_key_values is None:
+                                    outputs = self.model(**current_inputs, use_cache=True)
+                                else:
+                                    outputs = self.model(
+                                        input_ids=next_input_ids,
+                                        past_key_values=past_key_values,
+                                        use_cache=True,
+                                    )
                             else:
-                                outputs = self.model(
-                                    input_ids=next_input_ids,
-                                    past_key_values=past_key_values,
-                                    use_cache=True,
-                                )
+                                if step == 0:
+                                    outputs = self.model(**current_inputs, use_cache=False)
+                                else:
+                                    full_input_ids = torch.cat([current_inputs.input_ids, next_input_ids], dim=1)
+                                    current_inputs = type(current_inputs)(
+                                        input_ids=full_input_ids,
+                                        attention_mask=torch.ones_like(full_input_ids),
+                                    )
+                                    outputs = self.model(**current_inputs, use_cache=False)
                     
                     # Get logits and apply temperature
                     logits = outputs.logits[:, -1, :] / temperature
@@ -279,9 +263,13 @@ class InferenceBenchmark:
                     
                     generated_tokens.append(next_token.item())
                     
-                    # Prepare for next iteration using KV cache
-                    past_key_values = getattr(outputs, 'past_key_values', None)
-                    next_input_ids = next_token
+                    # Prepare for next iteration
+                    if getattr(self.engine, 'supports_kv_cache', False):
+                        past_key_values = getattr(outputs, 'past_key_values', None)
+                        next_input_ids = next_token
+                    else:
+                        # For no-cache path, we update next_input_ids and keep building full sequence in the loop above
+                        next_input_ids = next_token
                     
                     # Convert next_input_ids to FP16 if needed
                     if self.model.dtype == torch.float16 and next_input_ids.dtype == torch.long:
