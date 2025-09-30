@@ -517,7 +517,7 @@ def main():
     ]
     
     # Early exit thresholds to test
-    early_exit_thresholds = [0.0, 0.25, 0.5, 0.75, 0.95]
+    early_exit_thresholds = [0.0, 0.25, 0.5, 0.75]
     
     # Initialize benchmark
     benchmark = InferenceBenchmark(
