@@ -18,26 +18,29 @@ def hadamard_transform(x: torch.Tensor) -> torch.Tensor:
     Returns:
         Transformed tensor with same shape as input
     """
-    # Store original shape
+    # Prefer CUDA kernel if available
+    try:
+        from .kernels import fwht as fwht_cuda, is_available as kernels_available
+        if x.is_cuda and kernels_available():
+            return fwht_cuda(x)
+    except Exception:
+        pass
+
+    # Fallback: iterative FWHT on last dimension
     original_shape = x.shape
     n = x.shape[-1]
-    
-    if n == 1:
-        return x
-    
-    # Reshape for recursive application
-    x = x.view(-1, n)
-    half = n // 2
-    
-    # Split and transform recursively
-    x1 = hadamard_transform(x[:, :half])
-    x2 = hadamard_transform(x[:, half:])
-    
-    # Combine results
-    result = torch.cat([x1 + x2, x1 - x2], dim=-1)
-    
-    # Reshape back to original shape
-    return result.view(original_shape)
+    if (n & (n - 1)) != 0:
+        raise ValueError(f"FWHT requires power-of-two length, got {n}")
+    y = x.contiguous().view(-1, n)
+    h = 1
+    while h < n:
+        for start in range(0, n, 2 * h):
+            a = y[:, start:start + h]
+            b = y[:, start + h:start + 2 * h]
+            y[:, start:start + h] = a + b
+            y[:, start + h:start + 2 * h] = a - b
+        h <<= 1
+    return y.view(original_shape)
 
 
 class HBitLinear(nn.Module):
@@ -144,87 +147,54 @@ class HBitLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
         """
-        Forward pass with Layer Normalization, Hadamard transformation, and quantization.
-        
-        Args:
-            x: Input tensor
-            
-        Returns:
-            Output tensor
+        Forward pass with Layer Normalization, Hadamard transformation, and QAT using STE.
+        Does not modify parameters in-place.
         """
         # Store original shape for reshaping
         original_shape = x.shape
-        
-        # Calculate expected output shape
         expected_output_shape = list(original_shape)
-        expected_output_shape[-1] = self.out_features  # Change last dimension to out_features
+        expected_output_shape[-1] = self.out_features
         expected_output_shape = tuple(expected_output_shape)
-        
-        # Apply Layer Normalization first
+
+        # LayerNorm
         x_ln = self.layer_norm(x)
-        
-        # Quantize activations before Hadamard transform
-        x_q, x_scale = self._activation_quantize(x_ln, self.activation_bits)
-        
-        # Apply Hadamard transform to quantized input
+
+        # Activation fake-quant (per-token) with STE
+        bits = self.activation_bits
+        x_scale = x_ln.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-6)
+        max_val = (1 << (bits - 1)) - 1
+        x_int = (x_ln * max_val / x_scale).round().clamp(-max_val, max_val)
+        x_q = x_int * x_scale / max_val
+        if bool(self.training):
+            x_q = x_ln - x_ln.detach() + x_q.detach()
+
+        # Hadamard transform on fake-quant activations
         x_h = hadamard_transform(x_q)
 
-
-
-        # Quantize weights during forward pass (training with STE)
+        # Weight fake-quant (ternary) with STE
+        w_scale = self.weight.abs().mean().clamp(min=1e-6)
+        w_q = torch.zeros_like(self.weight)
+        w_q[self.weight > 0.5 * w_scale] = 1.0
+        w_q[self.weight < -0.5 * w_scale] = -1.0
+        w_q = w_q * w_scale
         if bool(self.training):
-            # During training, use Straight-Through Estimator for backprop
-            w_q, w_scale = self._weight_quantize(self.weight)
-            # Store original weights for backward pass
-            w_original = self.weight.data.clone()
-            # Replace weights with quantized version for forward pass
-            self.weight.data = w_q * w_scale
-            
+            w_q = self.weight - self.weight.detach() + w_q.detach()
 
-                
-            
-            # Perform linear transformation
-            # Reshape for linear layer: (batch_size * seq_length, in_features) -> (batch_size * seq_length, out_features)
-            x_h_flat = x_h.view(-1, x_h.shape[-1])
-            output_flat = F.linear(x_h_flat, self.weight, self.bias)
-            # Reshape back to expected output shape
-            try:
-                output = output_flat.view(expected_output_shape)
-            except RuntimeError as e:
-                print(f"DEBUG: Reshape error in H-BitLinear training")
-                print(f"  x_h shape: {x_h.shape}, elements: {x_h.numel()}")
-                print(f"  x_h_flat shape: {x_h_flat.shape}, elements: {x_h_flat.numel()}")
-                print(f"  output_flat shape: {output_flat.shape}, elements: {output_flat.numel()}")
-                print(f"  original_shape: {original_shape}")
-                print(f"  expected_output_shape: {expected_output_shape}")
-                print(f"  expected elements: {torch.tensor(expected_output_shape).prod().item()}")
-                raise e
-            # Restore original weights for backward pass
-            self.weight.data = w_original
-        else:
-            # During inference, use quantized weights directly
-            w_q, w_scale = self._weight_quantize(self.weight)
-            
-            
-            
-            # Matrix multiplication with quantized values
-            # Reshape for linear layer: (batch_size * seq_length, in_features) -> (batch_size * seq_length, out_features)
-            x_h_flat = x_h.view(-1, x_h.shape[-1])
-            output_flat = F.linear(x_h_flat, w_q * w_scale, self.bias)
-            # Reshape back to expected output shape
-            try:
-                output = output_flat.view(expected_output_shape)
-            except RuntimeError as e:
-                print(f"DEBUG: Reshape error in H-BitLinear inference")
-                print(f"  x_h shape: {x_h.shape}, elements: {x_h.numel()}")
-                print(f"  x_h_flat shape: {x_h_flat.shape}, elements: {x_h_flat.numel()}")
-                print(f"  output_flat shape: {output_flat.shape}, elements: {output_flat.numel()}")
-                print(f"  original_shape: {original_shape}")
-                print(f"  expected_output_shape: {expected_output_shape}")
-                print(f"  expected elements: {torch.tensor(expected_output_shape).prod().item()}")
-                raise e
+        # Linear on flattened last-dim, then reshape
+        x_h_flat = x_h.view(-1, x_h.shape[-1])
+        output_flat = F.linear(x_h_flat, w_q, self.bias)
+        try:
+            output = output_flat.view(expected_output_shape)
+        except RuntimeError as e:
+            print(f"DEBUG: Reshape error in H-BitLinear")
+            print(f"  x_h shape: {x_h.shape}, elements: {x_h.numel()}")
+            print(f"  x_h_flat shape: {x_h_flat.shape}, elements: {x_h_flat.numel()}")
+            print(f"  output_flat shape: {output_flat.shape}, elements: {output_flat.numel()}")
+            print(f"  original_shape: {original_shape}")
+            print(f"  expected_output_shape: {expected_output_shape}")
+            print(f"  expected elements: {torch.tensor(expected_output_shape).prod().item()}")
+            raise e
 
-        # Apply inverse Hadamard transform to output
+        # Inverse Hadamard
         output = hadamard_transform(output)
-        
         return output

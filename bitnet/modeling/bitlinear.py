@@ -117,66 +117,46 @@ class BitLinear(nn.Module):
         return x_scaled, scale
     
 
-    def forward(self, x: torch.Tensor, bits: Optional[int] = None, ) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
+    def forward(self, x: torch.Tensor, bits: Optional[int] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
         """
-        Forward pass with quantization.
+        Forward pass with quantization-aware training (QAT) using Straight-Through Estimator (STE).
+        Does NOT modify parameters in-place, preserving autograd.
         
         Args:
             x: Input tensor
             bits: Number of bits for activation quantization (default: uses self.activation_bits)
-            return_quantization_info: Whether to return quantization loss information
-            
         Returns:
-            Output tensor, or (output_tensor, quantization_info) if return_quantization_info=True
+            Output tensor
         """
         if bits is None:
             bits = self.activation_bits
-        
-        # Quantize input activations for both training and inference
-        x_q, x_scale = self._activation_quantize(x, bits)
-        
 
-        
-        is_training = self.training if isinstance(self.training, bool) else bool(self.training)
-        if is_training:
-            # During training, use Straight-Through Estimator for backprop
-            w_q, w_scale = self._weight_quantize(self.weight)
-            w_original = self.weight.data.clone()
-            self.weight.data = w_q * w_scale
-            
-            # Check for extreme scaling and handle safely
-            scaling_ratio = w_scale / x_scale
-            if scaling_ratio.max().item() > 1000:
-                print(f"WARNING: Extreme scaling ratio detected! Max: {scaling_ratio.max().item():.2e}")
-                # Clamp the scaling ratio to prevent numerical instability
-                scaling_ratio = scaling_ratio.clamp(max=1000.0)
-                # Adjust x_scale to maintain proper scaling
-                x_scale = w_scale / scaling_ratio
-            
-            # Safe division with numerical stability
-            x_scale_safe = x_scale.clamp(min=1e-8)
-            output = F.linear(x_q, self.weight, self.bias) / x_scale_safe
-            
-            if output is not None and (torch.isnan(output).any().item() or torch.isinf(output).any().item()):
-                print(f"ERROR: NaN/Inf detected in BitLinear output before squared_relu!")
-            
-            self.weight.data = w_original
-        else:
-            # During inference, use quantized weights directly
-            w_q, w_scale = self._weight_quantize(self.weight)
-            
-            # Check for extreme scaling and handle safely
-            scaling_ratio = w_scale / x_scale
-            if scaling_ratio.max().item() > 1000:
-                print(f"WARNING: Extreme scaling ratio detected! Max: {scaling_ratio.max().item():.2e}")
-                # Clamp the scaling ratio to prevent numerical instability
-                scaling_ratio = scaling_ratio.clamp(max=1000.0)
-                # Adjust x_scale to maintain proper scaling
-                x_scale = w_scale / scaling_ratio
-            
-            # Safe division with numerical stability
-            x_scale_safe = x_scale.clamp(min=1e-8)
-            output = F.linear(x_q, w_q * w_scale, self.bias) / x_scale_safe
-        # Apply Squared ReLU activation
+        # --- Activation fake-quant with STE ---
+        # Per-token dynamic scale
+        x_scale = x.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-6)
+        max_val = (1 << (bits - 1)) - 1
+        x_int = (x * max_val / x_scale).round().clamp(-max_val, max_val)
+        x_q = x_int * x_scale / max_val
+
+        if bool(self.training):
+            # STE: use quantized values in forward, full-precision gradients in backward
+            x_q = x - x.detach() + x_q.detach()
+
+        # --- Weight fake-quant with STE (ternary) ---
+        w_scale = self.weight.abs().mean().clamp(min=1e-6)
+        w_q = torch.zeros_like(self.weight)
+        w_q[self.weight > 0.5 * w_scale] = 1.0
+        w_q[self.weight < -0.5 * w_scale] = -1.0
+        w_q = w_q * w_scale
+
+        if bool(self.training):
+            # STE for weights
+            w_q = self.weight - self.weight.detach() + w_q.detach()
+
+        # Linear with fake-quantized tensors (no in-place .data changes)
+        output = F.linear(x_q, w_q, self.bias)
+
+        # Squared ReLU activation
         output = squared_relu(output)
-        return output 
+        
+        return output
