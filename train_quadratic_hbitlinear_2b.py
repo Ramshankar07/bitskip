@@ -599,17 +599,23 @@ def main():
     logger = setup_logging(args.output_dir)
     logger.info("Starting BitNet 2B Parameter Training with H-BitLinear - Clean Implementation")
     
-    # Apply H200 optimization flags
+    # Apply H200 optimization flags with memory management
     if args.aggressive_batch:
-        args.batch_size = 8
-        args.max_length = 2048
-        args.gradient_accumulation_steps = 1
+        args.batch_size = 2  # Reduced from 8 to prevent OOM for 2B model
+        args.max_length = 1024  # Reduced from 2048 to prevent OOM
+        args.gradient_accumulation_steps = 4  # Effective batch size = 2 * 4 = 8
         logger.info("🚀 Using aggressive batch settings for maximum H200 utilization")
     elif args.conservative_batch:
-        args.batch_size = 2
-        args.max_length = 512
-        args.gradient_accumulation_steps = 4
+        args.batch_size = 1  # Very conservative for 2B model
+        args.max_length = 256  # Very short sequences
+        args.gradient_accumulation_steps = 8  # Effective batch size = 1 * 8 = 8
         logger.info("🛡️ Using conservative batch settings for stability")
+    else:
+        # Default settings with memory safety for 2B model
+        args.batch_size = 1  # Safe default for 2B model
+        args.max_length = 512  # Balanced sequence length
+        args.gradient_accumulation_steps = 8  # Effective batch size = 1 * 8 = 8
+        logger.info("⚖️ Using default H200 batch settings with memory safety")
     
     logger.info(f"Configuration: {vars(args)}")
     
@@ -753,10 +759,13 @@ def main():
                     dataloader_iter = iter(dataloader)
                     batch = next(dataloader_iter)
                 
-                # Move to device
+                # Move to device with memory management
                 input_ids = batch['input_ids'].to(device)
                 attention_mask = batch['attention_mask'].to(device)
                 labels = batch['labels'].to(device)
+                
+                # Clear cache before forward pass to free memory
+                torch.cuda.empty_cache()
                 
                 # Forward pass with mixed precision
                 with autocast('cuda', dtype=torch.float16):
@@ -768,8 +777,12 @@ def main():
                     )
                     loss = outputs['loss']
                     
-                    # Check for NaN/Inf in loss
-                    if loss is not None and (torch.isnan(loss).any().item() or torch.isinf(loss).any().item() or loss.item() > 100):
+                    # Check for None, NaN/Inf in loss
+                    if loss is None:
+                        logger.error(f"🚨 Loss is None at step {step}, likely due to OOM. Skipping batch.")
+                        continue
+                    
+                    if torch.isnan(loss).any().item() or torch.isinf(loss).any().item() or loss.item() > 100:
                         logger.error(f"🚨 NaN/Inf/Extreme loss detected at step {step}: {loss.item()}")
                         logger.error("Running emergency recovery...")
                         
@@ -796,6 +809,9 @@ def main():
             # Update weights
             grad_scaler.step(optimizer)
             grad_scaler.update()
+            
+            # Clear cache after optimizer step
+            torch.cuda.empty_cache()
             
             # Compute gradient norm for adaptive LR adjustment
             with torch.no_grad():

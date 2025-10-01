@@ -1,0 +1,197 @@
+{
+  "model_info": {
+    "model_name": "RichardErkhov/facebook_-_layerskip-llama3.2-1B-gguf",
+    "model_file": "layerskip-llama3.2-1B.Q2_K.gguf",
+    "inference_method": "huggingface_transformers"
+  },
+  "metrics": {
+    "single_requests": {
+      "prompt_1": {
+        "prompt": "The future of artificial intelligence is",
+        "max_tokens": 100,
+        "num_runs": 3,
+        "generation_times": [
+          5.112701892852783,
+          4.59719705581665,
+          4.652932643890381
+        ],
+        "tokens_generated": [
+          78,
+          89,
+          64
+        ],
+        "throughputs": [
+          15.256121251473473,
+          19.359622595988537,
+          13.754766057926151
+        ],
+        "avg_generation_time": 4.7876105308532715,
+        "std_generation_time": 0.2829132538067178,
+        "avg_throughput": 16.123503301796053,
+        "std_throughput": 2.9013562206288146,
+        "avg_tokens": 77,
+        "std_tokens": 12.529964086141668
+      },
+      "prompt_2": {
+        "prompt": "In a world where technology advances rapidly,",
+        "max_tokens": 100,
+        "num_runs": 3,
+        "generation_times": [
+          5.598463773727417,
+          4.604540586471558,
+          4.577217102050781
+        ],
+        "tokens_generated": [
+          92,
+          86,
+          80
+        ],
+        "throughputs": [
+          16.43307945149872,
+          18.677216192354486,
+          17.477868804640426
+        ],
+        "avg_generation_time": 4.926740487416585,
+        "std_generation_time": 0.5818898291166386,
+        "avg_throughput": 17.529388149497876,
+        "std_throughput": 1.1229550792821545,
+        "avg_tokens": 86,
+        "std_tokens": 6.0
+      },
+      "prompt_3": {
+        "prompt": "The key to successful machine learning is",
+        "max_tokens": 100,
+        "num_runs": 3,
+        "generation_times": [
+          4.701542139053345,
+          4.679344892501831,
+          4.95445442199707
+        ],
+        "tokens_generated": [
+          90,
+          71,
+          83
+        ],
+        "throughputs": [
+          19.142655183799224,
+          15.173064100013272,
+          16.75260138260468
+        ],
+        "avg_generation_time": 4.778447151184082,
+        "std_generation_time": 0.15283029468300655,
+        "avg_throughput": 17.02277355547239,
+        "std_throughput": 1.9985389902031627,
+        "avg_tokens": 81.33333333333333,
+        "std_tokens": 9.60902353693305
+      },
+      "prompt_4": {
+        "prompt": "Quantum computing represents a paradigm shift because",
+        "max_tokens": 100,
+        "num_runs": 3,
+        "generation_times": [
+          4.669796705245972,
+          4.635840654373169,
+          4.583724498748779
+        ],
+        "tokens_generated": [
+          93,
+          87,
+          89
+        ],
+        "throughputs": [
+          19.915213845503242,
+          18.766822780659968,
+          19.416524711355223
+        ],
+        "avg_generation_time": 4.62978728612264,
+        "std_generation_time": 0.043354222784017425,
+        "avg_throughput": 19.366187112506143,
+        "std_throughput": 0.5758479963031783,
+        "avg_tokens": 89.66666666666667,
+        "std_tokens": 3.0550504633038935
+      },
+      "prompt_5": {
+        "prompt": "The intersection of neuroscience and AI",
+        "max_tokens": 100,
+        "num_runs": 3,
+        "generation_times": [
+          4.805156230926514,
+          4.691508769989014,
+          4.608023643493652
+        ],
+        "tokens_generated": [
+          91,
+          94,
+          83
+        ],
+        "throughputs": [
+          18.93798986478608,
+          20.036198291113955,
+          18.012060358499404
+        ],
+        "avg_generation_time": 4.701562881469727,
+        "std_generation_time": 0.09895012948573453,
+        "avg_throughput": 18.99541617146648,
+        "std_throughput": 1.0132901499997373,
+        "avg_tokens": 89.33333333333333,
+        "std_tokens": 5.686240703077327
+      }
+    },
+    "throughput": {
+      "sequential": {
+        "num_concurrent": 1,
+        "num_requests": 10,
+        "request_times": [
+          2.3221402168273926,
+          2.346615791320801,
+          2.4332451820373535,
+          2.956631898880005,
+          2.6627469062805176,
+          2.331490993499756,
+          2.3380908966064453,
+          2.3288803100585938,
+          2.347811698913574,
+          2.3288843631744385
+        ],
+        "successful_requests": 10,
+        "failed_requests": 0,
+        "total_tokens": 435,
+        "total_time": 24.40277361869812,
+        "avg_request_time": 2.439653825759888,
+        "requests_per_second": 0.40978948361581763,
+        "tokens_per_second": 17.825842537288068,
+        "success_rate": 1.0
+      }
+    },
+    "memory_usage": {
+      "system_memory": {
+        "total_gb": 15.36431884765625,
+        "available_gb": 2.1191329956054688,
+        "used_gb": 13.245250701904297,
+        "percent_used": 86.2
+      },
+      "gpu_memory": [
+        {
+          "device": 0,
+          "memory_allocated_gb": 0.0,
+          "memory_reserved_gb": 0.0,
+          "memory_total_gb": 3.99969482421875
+        }
+      ]
+    }
+  },
+  "system_info": {
+    "cpu_count": 12,
+    "memory_gb": 15.36431884765625,
+    "python_version": "3.13.2",
+    "platform": "windows",
+    "gpu_count": 1,
+    "gpu_info": [
+      {
+        "name": "NVIDIA GeForce GTX 1650 Ti",
+        "memory_total": 3.99969482421875,
+        "compute_capability": "7.5"
+      }
+    ]
+  }
+}
