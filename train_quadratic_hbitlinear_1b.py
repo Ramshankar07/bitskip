@@ -564,15 +564,15 @@ def main():
         args.gradient_accumulation_steps = 4  # Effective batch size = 4 * 4 = 16
         logger.info("🚀 Using aggressive batch settings for maximum H200 utilization")
     elif args.conservative_batch:
-        args.batch_size = 1  # Very conservative to prevent OOM
-        args.max_length = 512  # Shorter sequences
-        args.gradient_accumulation_steps = 8  # Effective batch size = 1 * 8 = 8
+        args.batch_size = 2  # More reasonable conservative
+        args.max_length = 512  # Reasonable sequence length
+        args.gradient_accumulation_steps = 4  # Effective batch size = 2 * 4 = 8
         logger.info("🛡️ Using conservative batch settings for stability")
     else:
         # Default settings with memory safety
-        args.batch_size = 2  # Safe default
-        args.max_length = 1024  # Balanced sequence length
-        args.gradient_accumulation_steps = 8  # Effective batch size = 2 * 8 = 16
+        args.batch_size = 2  # More reasonable default
+        args.max_length = 1024  # Better sequence length for utilization
+        args.gradient_accumulation_steps = 4  # Effective batch size = 2 * 4 = 8
         logger.info("⚖️ Using default H200 batch settings with memory safety")
     
     logger.info(f"Configuration: {vars(args)}")
@@ -666,6 +666,17 @@ def main():
     logger.info("Data loader created successfully")
     if is_random:
         logger.warning("Using random data for testing - this is not ideal for actual training")
+    
+    # Test dataloader with first batch to catch issues early
+    logger.info("Testing dataloader with first batch...")
+    try:
+        test_iter = iter(dataloader)
+        test_batch = next(test_iter)
+        logger.info(f"✅ Dataloader test successful - batch shape: {test_batch['input_ids'].shape}")
+    except Exception as e:
+        logger.error(f"❌ Dataloader test failed: {e}")
+        logger.error("This indicates a problem with the dataloader setup")
+        return
     
     # Optimizer and scheduler - Using custom WSD scheduler for BitNet + LayerSkip
     optimizer = torch.optim.AdamW(

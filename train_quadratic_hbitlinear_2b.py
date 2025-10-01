@@ -26,6 +26,7 @@ import sys
 import argparse
 import logging
 import json
+import signal
 from pathlib import Path
 from typing import Optional, Dict
 
@@ -613,15 +614,15 @@ def main():
         args.gradient_accumulation_steps = 4  # Effective batch size = 2 * 4 = 8
         logger.info("🚀 Using aggressive batch settings for maximum H200 utilization")
     elif args.conservative_batch:
-        args.batch_size = 1  # Very conservative for 2B model
-        args.max_length = 256  # Very short sequences
-        args.gradient_accumulation_steps = 8  # Effective batch size = 1 * 8 = 8
+        args.batch_size = 2  # More reasonable conservative for 2B model
+        args.max_length = 512  # Reasonable sequence length
+        args.gradient_accumulation_steps = 4  # Effective batch size = 2 * 4 = 8
         logger.info("🛡️ Using conservative batch settings for stability")
     else:
         # Default settings with memory safety for 2B model
-        args.batch_size = 1  # Safe default for 2B model
-        args.max_length = 512  # Balanced sequence length
-        args.gradient_accumulation_steps = 8  # Effective batch size = 1 * 8 = 8
+        args.batch_size = 2  # More reasonable default for 2B model
+        args.max_length = 1024  # Better sequence length for utilization
+        args.gradient_accumulation_steps = 4  # Effective batch size = 2 * 4 = 8
         logger.info("⚖️ Using default H200 batch settings with memory safety")
     
     logger.info(f"Configuration: {vars(args)}")
@@ -726,6 +727,17 @@ def main():
     if is_random:
         logger.warning("Using random data for testing - this is not ideal for actual training")
     
+    # Test dataloader with first batch to catch issues early
+    logger.info("Testing dataloader with first batch...")
+    try:
+        test_iter = iter(dataloader)
+        test_batch = next(test_iter)
+        logger.info(f"✅ Dataloader test successful - batch shape: {test_batch['input_ids'].shape}")
+    except Exception as e:
+        logger.error(f"❌ Dataloader test failed: {e}")
+        logger.error("This indicates a problem with the dataloader setup")
+        return
+    
     # Optimizer and scheduler - Using custom WSD scheduler for BitNet + LayerSkip
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -758,7 +770,9 @@ def main():
     model.train()
     
     # Create iterator for the dataloader
+    logger.info("Creating dataloader iterator...")
     dataloader_iter = iter(dataloader)
+    logger.info("Dataloader iterator created successfully")
     
     for step in range(1, args.num_steps + 1):
         try:
@@ -766,13 +780,34 @@ def main():
             
             # Gradient Accumulation Loop
             for micro_step in range(args.gradient_accumulation_steps):
-                # Get batch from iterator
+                # Get batch from iterator with timeout protection
                 try:
+                    logger.info(f"Getting batch for step {step}, micro_step {micro_step}")
+                    
+                    # Add timeout for first batch to prevent hanging
+                    if step == 1 and micro_step == 0:
+                        def timeout_handler(signum, frame):
+                            raise TimeoutError("Timeout waiting for first batch")
+                        
+                        signal.signal(signal.SIGALRM, timeout_handler)
+                        signal.alarm(30)  # 30 second timeout
+                    
                     batch = next(dataloader_iter)
+                    
+                    if step == 1 and micro_step == 0:
+                        signal.alarm(0)  # Cancel timeout
+                    
+                    logger.info(f"Batch retrieved successfully for step {step}, micro_step {micro_step}")
                 except StopIteration:
+                    logger.info("StopIteration caught, restarting dataloader iterator...")
                     # Restart iterator if we've exhausted the dataset
                     dataloader_iter = iter(dataloader)
                     batch = next(dataloader_iter)
+                    logger.info("New batch retrieved after restart")
+                except TimeoutError:
+                    logger.error("Timeout waiting for first batch - dataloader may be hanging")
+                    logger.error("Try using --conservative_batch or reducing batch_size")
+                    return
                 
                 # Move to device with memory management
                 input_ids = batch['input_ids'].to(device)
