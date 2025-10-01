@@ -27,6 +27,7 @@ load_dotenv()
 # Import the H-BitLinear BitNet model
 from bitnet.modeling.model2 import BitNetModel2
 from bitnet.utils.default_config import DefaultConfig
+from bitnet.modeling.kernels import is_available as fwht_cuda_available
 
 # Import emergency recovery
 from emergency_nan_recovery import recover_from_nan, diagnose_model_corruption
@@ -587,6 +588,14 @@ def main():
     else:
         device = torch.device('cpu')
         logger.info("Using CPU")
+    
+    # Debug: Whether H-BitLinear FWHT CUDA kernel will be used
+    try:
+        fwht_available = fwht_cuda_available()
+    except Exception:
+        fwht_available = False
+    will_use_cuda_fwht = fwht_available and (device.type == 'cuda')
+    logger.info(f"H-BitLinear FWHT CUDA kernel available: {fwht_available}, will_use_cuda_kernel: {will_use_cuda_fwht}")
     
     # Load Llama 3 tokenizer
     try:
