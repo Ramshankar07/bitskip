@@ -35,6 +35,7 @@ import torch.nn.functional as F
 from torch.amp import autocast, GradScaler
 from transformers import AutoTokenizer
 from safetensors.torch import save_file, load_file
+from torch.utils.tensorboard import SummaryWriter
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -577,6 +578,10 @@ def parse_args():
                       help='Log every X steps')
     parser.add_argument('--save_steps', type=int, default=500,
                       help='Save checkpoint every X steps')
+    parser.add_argument('--eval_steps', type=int, default=100,
+                      help='Evaluate every X steps')
+    parser.add_argument('--log_dir', type=str, default='./runs/bitnet-hbitlinear-2b',
+                      help='TensorBoard log directory')
     
     parser.add_argument('--early_exit_threshold', type=float, default=0.95,
                       help='Confidence threshold for early exit')
@@ -597,6 +602,7 @@ def main():
     
     # Setup logging
     logger = setup_logging(args.output_dir)
+    tb_writer = SummaryWriter(log_dir=args.log_dir)
     logger.info("Starting BitNet 2B Parameter Training with H-BitLinear - Clean Implementation")
     
     # Apply H200 optimization flags with memory management
@@ -835,6 +841,11 @@ def main():
             # Logging
             if step % args.logging_steps == 0:
                 logger.info(f"Step {step}: Loss = {total_loss:.4f}, LR = {current_lr:.2e}")
+                try:
+                    tb_writer.add_scalar('train/loss', total_loss, step)
+                    tb_writer.add_scalar('train/lr', current_lr, step)
+                except Exception:
+                    pass
                 
                 # Enhanced memory stats for H200 optimization
                 if torch.cuda.is_available():
@@ -853,7 +864,27 @@ def main():
                     elif utilization_percent > 90:
                         logger.warning(f"⚠️ High GPU utilization ({utilization_percent:.1f}%). Monitor for OOM errors.")
             
-            # Periodic health check every 50 steps
+            # Periodic evaluation and health check
+            if step % args.eval_steps == 0:
+                try:
+                    model.eval()
+                    with torch.no_grad():
+                        try:
+                            eval_batch = next(dataloader_iter)
+                        except StopIteration:
+                            dataloader_iter = iter(dataloader)
+                            eval_batch = next(dataloader_iter)
+                        e_input_ids = eval_batch['input_ids'].to(device)
+                        e_attention_mask = eval_batch['attention_mask'].to(device)
+                        e_labels = eval_batch['labels'].to(device)
+                        e_out = model.safe_forward(input_ids=e_input_ids, attention_mask=e_attention_mask, labels=e_labels)
+                        if e_out['loss'] is not None:
+                            tb_writer.add_scalar('val/loss', float(e_out['loss'].item()), step)
+                except Exception:
+                    pass
+                finally:
+                    model.train()
+            
             if step % 50 == 0:
                 logger.info("🔍 Running periodic model health check...")
                 
@@ -904,7 +935,11 @@ def main():
     # Cleanup
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        
+    
+    try:
+        tb_writer.close()
+    except Exception:
+        pass
     logger.info("Training completed successfully!")
 
 
