@@ -64,6 +64,29 @@ class BitNetToSafeTensorsConverter:
         """Find all BitNet model directories."""
         models = []
         
+        # Check if input_dir is a specific model directory
+        if (self.input_dir / "config.json").exists() and (self.input_dir / "model.pt").exists():
+            # This is a specific model directory
+            model_name = self.input_dir.name
+            if "final_model" in str(self.input_dir):
+                # Extract parent directory name for model name
+                parent_name = self.input_dir.parent.name
+                if "hbitlinear" in parent_name:
+                    model_name = f"hbitlinear-{self._extract_size_from_path(self.input_dir.parent)}"
+                elif "bitnet" in parent_name:
+                    model_name = f"bitnet-{self._extract_size_from_path(self.input_dir.parent)}"
+                else:
+                    model_name = parent_name
+            
+            models.append({
+                'path': str(self.input_dir),
+                'name': model_name,
+                'config_path': str(self.input_dir / "config.json"),
+                'model_path': str(self.input_dir / "model.pt")
+            })
+            self.logger.info(f"Found specific BitNet model: {model_name} at {self.input_dir}")
+            return models
+        
         # Look for common BitNet output directories
         search_patterns = [
             "output-bitnet-1b/final_model",

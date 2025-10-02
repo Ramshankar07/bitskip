@@ -50,29 +50,23 @@ check_model_exists() {
     fi
 }
 
-# Function to convert a single model
-convert_model() {
-    local model_name="$1"
-    local model_path="$2"
+# Function to check if all models exist
+check_all_models_exist() {
+    local all_exist=true
     
-    print_status "Converting $model_name from $model_path"
-    
-    if check_model_exists "$model_path"; then
-        # Run the converter script for this specific model
-        python "$CONVERTER_SCRIPT" \
-            --input-dir "$model_path" \
-            --output-dir "$OUTPUT_DIR/$model_name"
-        
-        if [[ $? -eq 0 ]]; then
-            print_success "Successfully converted $model_name"
-        else
-            print_error "Failed to convert $model_name"
-            return 1
+    for model_name in "${!MODELS[@]}"; do
+        model_path="${MODELS[$model_name]}"
+        if ! check_model_exists "$model_path"; then
+            all_exist=false
         fi
-    else
-        print_error "Skipping $model_name - model not found or incomplete"
+    done
+    
+    if [[ "$all_exist" == "false" ]]; then
+        print_error "Some models are missing or incomplete. Please check the model directories."
         return 1
     fi
+    
+    return 0
 }
 
 # Main conversion function
@@ -91,77 +85,46 @@ main() {
     # Create output directory
     mkdir -p "$OUTPUT_DIR"
     
-    # Define the 4 models to convert
-    declare -A MODELS
-    MODELS[bitnet-1b]="output-bitnet-1b/final_model"
-    MODELS[bitnet-2b]="output-quadratic-2b-hf/final_model"
-    MODELS[hbitlinear-1b]="output-bitnet-hbitlinear-1b/final_model"
-    MODELS[hbitlinear-2b]="output-quadratic-hbitlinear-2b-hf/final_model"
+    # Check if all models exist first
+    print_status "Checking if all models exist..."
+    if ! check_all_models_exist; then
+        print_error "Cannot proceed with conversion due to missing models"
+        exit 1
+    fi
     
-    # Track conversion results
-    local successful=0
-    local failed=0
-    local total=${#MODELS[@]}
-    
-    print_status "Found $total models to convert"
+    print_status "All models found! Starting conversion..."
     echo "----------------------------------------"
     
-    # Convert each model
-    for model_name in "${!MODELS[@]}"; do
-        model_path="${MODELS[$model_name]}"
-        
-        print_status "Processing model $((successful + failed + 1))/$total: $model_name"
-        
-        if convert_model "$model_name" "$model_path"; then
-            ((successful++))
-        else
-            ((failed++))
-        fi
-        
-        echo "----------------------------------------"
-    done
+    # Run the converter script once for all models
+    python "$CONVERTER_SCRIPT" \
+        --input-dir "$INPUT_DIR" \
+        --output-dir "$OUTPUT_DIR"
+    
+    local conversion_exit_code=$?
+    
+    if [[ $conversion_exit_code -eq 0 ]]; then
+        print_success "Conversion completed successfully!"
+    else
+        print_error "Conversion failed with exit code: $conversion_exit_code"
+        exit 1
+    fi
     
     # Print final summary
     echo
-    print_status "Conversion Summary:"
-    print_success "Successfully converted: $successful/$total models"
+    print_status "Conversion completed!"
+    print_success "Converted models saved to: $OUTPUT_DIR"
+    print_status "Each model has its own subdirectory with SafeTensors files"
     
-    if [[ $failed -gt 0 ]]; then
-        print_error "Failed conversions: $failed/$total models"
-    fi
+    # Show usage instructions
+    echo
+    print_status "Usage with HuggingFace Transformers:"
+    echo "  from transformers import AutoTokenizer, AutoModelForCausalLM"
+    echo "  from safetensors.torch import load_file"
+    echo "  state_dict = load_file('$OUTPUT_DIR/bitnet-1b/bitnet-1b.safetensors')"
+    echo "  model = AutoModelForCausalLM.from_pretrained('.', state_dict=state_dict)"
     
-    if [[ $successful -gt 0 ]]; then
-        print_success "Converted models saved to: $OUTPUT_DIR"
-        print_status "Each model has its own subdirectory with GGUF files"
-        
-        # List converted models
-        echo
-        print_status "Converted models:"
-        for model_name in "${!MODELS[@]}"; do
-            if [[ -d "$OUTPUT_DIR/$model_name" ]]; then
-                print_success "  ✅ $model_name"
-            else
-                print_error "  ❌ $model_name"
-            fi
-        done
-        
-        # Show usage instructions
-        echo
-        print_status "Usage with HuggingFace Transformers:"
-        echo "  from transformers import AutoTokenizer, AutoModelForCausalLM"
-        echo "  from safetensors.torch import load_file"
-        echo "  state_dict = load_file('$OUTPUT_DIR/bitnet-1b/bitnet-1b.safetensors')"
-        echo "  model = AutoModelForCausalLM.from_pretrained('.', state_dict=state_dict)"
-    fi
-    
-    # Exit with appropriate code
-    if [[ $failed -eq 0 ]]; then
-        print_success "All conversions completed successfully!"
-        exit 0
-    else
-        print_error "Some conversions failed. Check the output above for details."
-        exit 1
-    fi
+    print_success "All conversions completed successfully!"
+    exit 0
 }
 
 # Parse command line arguments
