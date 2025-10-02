@@ -70,6 +70,18 @@ class InferenceBenchmark:
             ]
         )
     
+    def _model_dtype(self) -> torch.dtype:
+        try:
+            return next(self.model.parameters()).dtype
+        except StopIteration:
+            return torch.float32
+    
+    def _model_device(self) -> torch.device:
+        try:
+            return next(self.model.parameters()).device
+        except StopIteration:
+            return torch.device('cpu')
+
     def load_model(self):
         """Load the BitNet model and tokenizer using the unified engine."""
         self.logger.info(f"Loading model from {self.model_path}")
@@ -106,8 +118,8 @@ class InferenceBenchmark:
                 self.logger.info("Model converted to FP16 for inference")
             
             self.logger.info("Model and tokenizer loaded successfully via engine")
-            self.logger.info(f"Model dtype: {self.model.dtype}")
-            self.logger.info(f"Model device: {next(self.model.parameters()).device}")
+            self.logger.info(f"Model dtype: {self._model_dtype()}")
+            self.logger.info(f"Model device: {self._model_device()}")
         
         except Exception as e:
             self.logger.error(f"Failed to load model via engine: {str(e)}")
@@ -138,14 +150,16 @@ class InferenceBenchmark:
         """
         self.logger.info(f"Benchmarking with early_exit_threshold={early_exit_threshold}")
         
-        # Tokenize input
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        # Tokenize input and ensure dict of tensors on correct device
+        tok_out = self.tokenizer(prompt, return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in tok_out.items()}
         
-        # Convert to FP16 if model is in FP16
-        if self.model.dtype == torch.float16:
-            inputs = {k: v.half() if v.dtype == torch.float32 else v for k, v in inputs.items()}
+        # Convert to FP16 inputs if model is in FP16 (do not change integer tensors)
+        model_dtype = self._model_dtype()
+        if model_dtype == torch.float16:
+            inputs = {k: (v.half() if v.dtype.is_floating_point else v) for k, v in inputs.items()}
         
-        input_length = inputs.input_ids.shape[1]
+        input_length = inputs["input_ids"].shape[1]
         
         all_metrics = []
         
@@ -201,11 +215,11 @@ class InferenceBenchmark:
                                     outputs = self.model(**current_inputs, use_cache=False)
                                 else:
                                     # Append last token to sequence for next step
-                                    full_input_ids = torch.cat([current_inputs.input_ids, next_input_ids], dim=1)
-                                    current_inputs = type(current_inputs)(
-                                        input_ids=full_input_ids,
-                                        attention_mask=torch.ones_like(full_input_ids),
-                                    )
+                                    full_input_ids = torch.cat([current_inputs["input_ids"], next_input_ids], dim=1)
+                                    current_inputs = {
+                                        "input_ids": full_input_ids,
+                                        "attention_mask": torch.ones_like(full_input_ids),
+                                    }
                                     outputs = self.model(**current_inputs, use_cache=False)
                     except TypeError:
                         # Fallback for older PyTorch versions
@@ -223,11 +237,11 @@ class InferenceBenchmark:
                                 if step == 0:
                                     outputs = self.model(**current_inputs, use_cache=False)
                                 else:
-                                    full_input_ids = torch.cat([current_inputs.input_ids, next_input_ids], dim=1)
-                                    current_inputs = type(current_inputs)(
-                                        input_ids=full_input_ids,
-                                        attention_mask=torch.ones_like(full_input_ids),
-                                    )
+                                    full_input_ids = torch.cat([current_inputs["input_ids"], next_input_ids], dim=1)
+                                    current_inputs = {
+                                        "input_ids": full_input_ids,
+                                        "attention_mask": torch.ones_like(full_input_ids),
+                                    }
                                     outputs = self.model(**current_inputs, use_cache=False)
                     
                     # Get logits and apply temperature
@@ -271,8 +285,8 @@ class InferenceBenchmark:
                         # For no-cache path, we update next_input_ids and keep building full sequence in the loop above
                         next_input_ids = next_token
                     
-                    # Convert next_input_ids to FP16 if needed
-                    if self.model.dtype == torch.float16 and next_input_ids.dtype == torch.long:
+                    # Convert next_input_ids to FP16 if needed (keep input_ids as long)
+                    if model_dtype == torch.float16 and next_input_ids.dtype == torch.long:
                         # Keep input_ids as long (integer) type, only convert attention_mask if present
                         pass
             
@@ -465,8 +479,8 @@ class InferenceBenchmark:
         print("\n" + "="*80)
         print("INFERENCE BENCHMARK SUMMARY (FP16 OPTIMIZED)")
         print("="*80)
-        print(f"Model dtype: {self.model.dtype}")
-        print(f"Model device: {next(self.model.parameters()).device}")
+        print(f"Model dtype: {self._model_dtype()}")
+        print(f"Model device: {self._model_device()}")
         print(f"Model config: {self.model.config.hidden_size} hidden, {self.model.config.num_hidden_layers} layers")
         print("="*80)
         
