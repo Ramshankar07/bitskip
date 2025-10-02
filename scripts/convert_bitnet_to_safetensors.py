@@ -141,6 +141,35 @@ class BitNetToSafeTensorsConverter:
         
         return models
     
+    def _clean_state_dict(self, state_dict: Dict) -> Dict:
+        """Clean state dict to remove duplicate tensors and handle memory sharing."""
+        cleaned_dict = {}
+        seen_tensors = set()
+        
+        # Priority order for tensor names (prefer shorter names)
+        priority_keys = [
+            'lm_head.weight', 'embed_tokens.weight', 'embed_positions.weight',
+            'q_proj.weight', 'k_proj.weight', 'v_proj.weight', 'o_proj.weight',
+            'gate_proj.weight', 'up_proj.weight', 'down_proj.weight'
+        ]
+        
+        # First pass: add priority keys
+        for key in priority_keys:
+            if key in state_dict:
+                cleaned_dict[key] = state_dict[key]
+                seen_tensors.add(id(state_dict[key]))
+        
+        # Second pass: add remaining keys, skipping duplicates
+        for key, tensor in state_dict.items():
+            if key not in cleaned_dict and id(tensor) not in seen_tensors:
+                cleaned_dict[key] = tensor
+                seen_tensors.add(id(tensor))
+            elif key not in cleaned_dict:
+                self.logger.warning(f"Skipping duplicate tensor: {key}")
+        
+        self.logger.info(f"Cleaned state dict: {len(cleaned_dict)} tensors (removed {len(state_dict) - len(cleaned_dict)} duplicates)")
+        return cleaned_dict
+    
     def _extract_size_from_path(self, path: Path) -> str:
         """Extract model size from path (1b, 2b, etc.)."""
         path_str = str(path).lower()
@@ -192,7 +221,11 @@ class BitNetToSafeTensorsConverter:
             
             # Convert state dict to SafeTensors format
             self.logger.info(f"Saving model weights to SafeTensors format...")
-            save_file(state_dict, str(safetensors_path))
+            
+            # Clean state dict to remove duplicate tensors
+            cleaned_state_dict = self._clean_state_dict(state_dict)
+            
+            save_file(cleaned_state_dict, str(safetensors_path))
             
             # Copy config.json to output directory
             config_output_path = model_output_dir / "config.json"
