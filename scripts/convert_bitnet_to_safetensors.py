@@ -144,7 +144,7 @@ class BitNetToSafeTensorsConverter:
     def _clean_state_dict(self, state_dict: Dict) -> Dict:
         """Clean state dict to remove duplicate tensors and handle memory sharing."""
         cleaned_dict = {}
-        seen_tensors = set()
+        seen_tensors = {}
         
         # Priority order for tensor names (prefer shorter names)
         priority_keys = [
@@ -153,19 +153,31 @@ class BitNetToSafeTensorsConverter:
             'gate_proj.weight', 'up_proj.weight', 'down_proj.weight'
         ]
         
-        # First pass: add priority keys
+        # First pass: add priority keys and clone tensors to break memory sharing
         for key in priority_keys:
             if key in state_dict:
-                cleaned_dict[key] = state_dict[key]
-                seen_tensors.add(id(state_dict[key]))
+                tensor = state_dict[key]
+                if isinstance(tensor, torch.Tensor):
+                    # Clone the tensor to break memory sharing
+                    cleaned_dict[key] = tensor.clone().detach()
+                    seen_tensors[id(tensor)] = key
+                else:
+                    cleaned_dict[key] = tensor
         
-        # Second pass: add remaining keys, skipping duplicates
+        # Second pass: add remaining keys, cloning tensors to break memory sharing
         for key, tensor in state_dict.items():
-            if key not in cleaned_dict and id(tensor) not in seen_tensors:
-                cleaned_dict[key] = tensor
-                seen_tensors.add(id(tensor))
-            elif key not in cleaned_dict:
-                self.logger.warning(f"Skipping duplicate tensor: {key}")
+            if key not in cleaned_dict:
+                if isinstance(tensor, torch.Tensor):
+                    # Check if this tensor shares memory with any already processed tensor
+                    tensor_id = id(tensor)
+                    if tensor_id in seen_tensors:
+                        self.logger.warning(f"Skipping duplicate tensor: {key} (shares memory with {seen_tensors[tensor_id]})")
+                    else:
+                        # Clone the tensor to break memory sharing
+                        cleaned_dict[key] = tensor.clone().detach()
+                        seen_tensors[tensor_id] = key
+                else:
+                    cleaned_dict[key] = tensor
         
         self.logger.info(f"Cleaned state dict: {len(cleaned_dict)} tensors (removed {len(state_dict) - len(cleaned_dict)} duplicates)")
         return cleaned_dict
