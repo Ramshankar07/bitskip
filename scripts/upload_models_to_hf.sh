@@ -88,11 +88,6 @@ for name in "${!MODEL_DIRS[@]}"; do
   # Upload config.json and model.pt at repo root
   upload_file "${MODEL_PATH}/config.json" "$REPO_ID" "config.json"
   upload_file "${MODEL_PATH}/model.pt" "$REPO_ID" "model.pt"
-
-  # Optional: also keep files under a versioned subfolder for organization
-  DATE_TAG="$(date +%Y%m%d_%H%M%S)"
-  upload_file "${MODEL_PATH}/config.json" "$REPO_ID" "releases/${DATE_TAG}/config.json"
-  upload_file "${MODEL_PATH}/model.pt" "$REPO_ID" "releases/${DATE_TAG}/model.pt"
 done
 
 echo "\n[DONE] Uploads completed."
