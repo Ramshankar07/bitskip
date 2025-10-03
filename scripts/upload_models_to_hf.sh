@@ -51,10 +51,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 declare -A MODEL_DIRS
-MODEL_DIRS[bitnet-1b]="${REPO_ROOT}/output-bitnet-1b/final_model"
-MODEL_DIRS[bitnet-2b]="${REPO_ROOT}/output-quadratic-2b-hf/final_model"
-MODEL_DIRS[hbitlinear-1b]="${REPO_ROOT}/output-bitnet-hbitlinear-1b/final_model"
-MODEL_DIRS[hbitlinear-2b]="${REPO_ROOT}/output-quadratic-hbitlinear-2b-hf/final_model"
+MODEL_DIRS[bitnet-1b]="${REPO_ROOT}/safetensors_models/bitnet-1b"
+MODEL_DIRS[bitnet-2b]="${REPO_ROOT}/safetensors_models/bitnet-2b"
+MODEL_DIRS[hbitlinear-1b]="${REPO_ROOT}/safetensors_models/hbitlinear-1b"
+MODEL_DIRS[hbitlinear-2b]="${REPO_ROOT}/safetensors_models/hbitlinear-2b"
 
 upload_file() {
   local file_path="$1"
@@ -85,9 +85,19 @@ for name in "${!MODEL_DIRS[@]}"; do
   echo "[INFO] Local folder: $MODEL_PATH"
   echo "[INFO] Target repo: $REPO_ID (rev: $REVISION) ${PRIVATE_FLAG:+[private]}"
 
-  # Upload config.json and model.pt at repo root
+  # Upload SafeTensors files at repo root
   upload_file "${MODEL_PATH}/config.json" "$REPO_ID" "config.json"
-  upload_file "${MODEL_PATH}/model.pt" "$REPO_ID" "model.pt"
+  upload_file "${MODEL_PATH}/README.md" "$REPO_ID" "README.md"
+  upload_file "${MODEL_PATH}/conversion_metadata.json" "$REPO_ID" "conversion_metadata.json"
+  
+  # Upload the .safetensors file (find the exact filename)
+  SAFETENSORS_FILE=$(find "${MODEL_PATH}" -name "*.safetensors" -type f | head -1)
+  if [[ -n "$SAFETENSORS_FILE" ]]; then
+    SAFETENSORS_FILENAME=$(basename "$SAFETENSORS_FILE")
+    upload_file "$SAFETENSORS_FILE" "$REPO_ID" "$SAFETENSORS_FILENAME"
+  else
+    echo "[WARN] No .safetensors file found in ${MODEL_PATH}" >&2
+  fi
 done
 
 echo "\n[DONE] Uploads completed."
