@@ -108,59 +108,7 @@ class BitNetHuggingFaceBenchmark:
         
         return info
     
-    def _convert_pt_to_gguf(self) -> bool:
-        """Convert BitNet .pt model to GGUF format."""
-        try:
-            self.logger.info(f"Converting BitNet model from {self.model_path} to GGUF format...")
-            
-            # Create temporary directory for conversion
-            self.temp_dir = tempfile.mkdtemp(prefix="bitnet_benchmark_")
-            self.logger.info(f"Using temporary directory: {self.temp_dir}")
-            
-            # Load the BitNet model
-            config_path = os.path.join(self.model_path, "config.json")
-            model_path_pt = os.path.join(self.model_path, "model.pt")
-            
-            if not os.path.exists(config_path):
-                self.logger.error(f"Config file not found: {config_path}")
-                return False
-            
-            if not os.path.exists(model_path_pt):
-                self.logger.error(f"Model file not found: {model_path_pt}")
-                return False
-            
-            # Load config
-            with open(config_path, 'r') as f:
-                config = json.load(f)
-            
-            # Load model state dict
-            state_dict = torch.load(model_path_pt, map_location='cpu')
-            
-            # Create a simple conversion to GGUF-compatible format
-            # This is a simplified conversion - in practice you'd want a proper converter
-            self.logger.info("Converting model weights to GGUF format...")
-            
-            # For now, we'll create a dummy GGUF file structure
-            # In a real implementation, you'd use a proper converter like llama.cpp's convert script
-            gguf_filename = f"{self.model_name}.gguf"
-            self.gguf_path = os.path.join(self.temp_dir, gguf_filename)
-            
-            # Create a minimal GGUF file (this is a placeholder - real conversion would be more complex)
-            self.logger.warning("Creating placeholder GGUF file - this is a simplified conversion")
-            
-            # For demonstration, we'll create a text file that mimics GGUF structure
-            with open(self.gguf_path, 'w') as f:
-                f.write("# Placeholder GGUF file for BitNet model\n")
-                f.write(f"# Original model: {self.model_path}\n")
-                f.write(f"# Config: {json.dumps(config, indent=2)}\n")
-                f.write("# This is a simplified conversion for benchmarking\n")
-            
-            self.logger.info(f"✅ Conversion completed: {self.gguf_path}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to convert model to GGUF: {e}")
-            return False
+    
     
     def _download_from_hf(self, repo_id: str) -> bool:
         """Download model from Hugging Face Hub."""

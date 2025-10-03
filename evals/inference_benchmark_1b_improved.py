@@ -174,7 +174,8 @@ class InferenceBenchmark:
                 self.logger.info(f"Model file detected, using directory: {model_dir}")
             else:
                 model_dir = resolved_model_path
-                model_file = os.path.join(model_dir, "model.pt")
+                # Pass the directory to the engine; it will prefer model.safetensors (or fallback)
+                model_file = model_dir
                 self.logger.info(f"Model directory detected: {model_dir}")
             
             # Tokenizer path/name

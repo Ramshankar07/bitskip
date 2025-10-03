@@ -173,11 +173,15 @@ class BitNetToSafeTensorsConverter:
             # They store entries like { 'packed_weights': np.ndarray, 'scale': float, 'shape': [...] }
             # Such checkpoints cannot be directly converted to SafeTensors without a decompression step.
             if isinstance(state_dict, dict) and state_dict:
-                sample_value = next(iter(state_dict.values()))
-                if isinstance(sample_value, dict) and all(k in sample_value for k in ("packed_weights", "scale", "shape")):
+                is_compressed = False
+                for v in state_dict.values():
+                    if isinstance(v, dict) and all(k in v for k in ("packed_weights", "scale", "shape")):
+                        is_compressed = True
+                        break
+                if is_compressed:
                     self.logger.error(
-                        "Detected compressed BitNet checkpoint. SafeTensors conversion is not supported for compressed" \
-                        " checkpoints. Please export an uncompressed state_dict (float/half tensors) and retry."
+                        "Detected compressed BitNet checkpoint. SafeTensors conversion is not supported for compressed checkpoints. "
+                        "Please export an uncompressed state_dict (float/half tensors) during training, or implement a decompression step before conversion."
                     )
                     return None
             
