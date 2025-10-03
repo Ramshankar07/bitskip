@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 Fixed BitNet to SafeTensors Converter Script
@@ -121,9 +122,19 @@ class BitNetToSafeTensorsConverter:
     def load_bitnet_model(self, model_info: Dict) -> Optional[Dict]:
         """Properly load BitNet model state dict."""
         try:
-            # Load model checkpoint
+            # Load model checkpoint (robust to PyTorch 2.6+ weights_only change)
             self.logger.info(f"Loading model from {model_info['model_path']}...")
-            checkpoint = torch.load(model_info['model_path'], map_location='cpu')
+            try:
+                # Prefer safer path first
+                checkpoint = torch.load(model_info['model_path'], map_location='cpu', weights_only=True)
+            except Exception as e:
+                # Allow-list known globals and retry with weights_only=False if trusted
+                import torch.serialization
+                try:
+                    torch.serialization.add_safe_globals(['numpy.core.multiarray._reconstruct', 'numpy._core.multiarray.scalar'])
+                except Exception:
+                    pass
+                checkpoint = torch.load(model_info['model_path'], map_location='cpu', weights_only=False)
             
             # Extract state dict based on checkpoint format
             state_dict = None
@@ -157,6 +168,18 @@ class BitNetToSafeTensorsConverter:
             if state_dict is None:
                 self.logger.error("Could not extract state dict from checkpoint")
                 return None
+
+            # Detect compressed BitNet checkpoints (produced by training scripts)
+            # They store entries like { 'packed_weights': np.ndarray, 'scale': float, 'shape': [...] }
+            # Such checkpoints cannot be directly converted to SafeTensors without a decompression step.
+            if isinstance(state_dict, dict) and state_dict:
+                sample_value = next(iter(state_dict.values()))
+                if isinstance(sample_value, dict) and all(k in sample_value for k in ("packed_weights", "scale", "shape")):
+                    self.logger.error(
+                        "Detected compressed BitNet checkpoint. SafeTensors conversion is not supported for compressed" \
+                        " checkpoints. Please export an uncompressed state_dict (float/half tensors) and retry."
+                    )
+                    return None
             
             # Load config if available
             config = {}
@@ -220,7 +243,7 @@ class BitNetToSafeTensorsConverter:
         return analysis
     
     def _process_state_dict_for_safetensors(self, state_dict: Dict) -> Dict:
-        """Process state dict to ensure compatibility with SafeTensors."""
+        """Process state dict to ensure compatibility with SafeTensors - CONVERT TO BFLOAT16."""
         processed = {}
         
         for key, value in state_dict.items():
@@ -228,11 +251,17 @@ class BitNetToSafeTensorsConverter:
                 # Ensure tensor is contiguous and on CPU
                 tensor = value.cpu().contiguous()
                 
-                # Handle different dtypes
-                if tensor.dtype == torch.bfloat16:
-                    # Convert bfloat16 to float16 for better compatibility
-                    self.logger.warning(f"Converting {key} from bfloat16 to float16")
-                    tensor = tensor.to(torch.float16)
+                # MODIFIED CONVERSION LOGIC - Convert all floating point tensors to bfloat16
+                if tensor.dtype in [torch.float32, torch.float64, torch.float16]:
+                    # Convert to bfloat16 for all floating point tensors
+                    self.logger.info(f"Converting {key} from {tensor.dtype} to bfloat16")
+                    tensor = tensor.to(torch.bfloat16)
+                elif tensor.dtype == torch.bfloat16:
+                    # Already bfloat16, keep as is
+                    self.logger.debug(f"{key} is already bfloat16")
+                else:
+                    # Keep non-floating point tensors as is (e.g., int8, long)
+                    self.logger.debug(f"Keeping {key} as {tensor.dtype}")
                 
                 # Clone to ensure no memory sharing
                 processed[key] = tensor.clone()
@@ -260,13 +289,14 @@ class BitNetToSafeTensorsConverter:
             model_output_dir = self.output_dir / model_info['name']
             model_output_dir.mkdir(parents=True, exist_ok=True)
             
-            # Process state dict for SafeTensors
+            # Process state dict for SafeTensors - THIS WILL NOW CONVERT TO BFLOAT16
             processed_state_dict = self._process_state_dict_for_safetensors(state_dict)
             
             # Create metadata for SafeTensors file
             safetensors_metadata = {
                 'format': 'pt',
                 'model_type': 'bitnet',
+                'torch_dtype': 'bfloat16',  # ADDED to indicate bfloat16 storage
                 'total_parameters': str(model_analysis['total_parameters']),
                 'has_bitlinear': str(model_analysis['has_bitlinear']),
                 'has_hbitlinear': str(model_analysis['has_hbitlinear']),
@@ -288,6 +318,7 @@ class BitNetToSafeTensorsConverter:
                 
                 # Add BitNet-specific fields to config
                 config['model_type'] = 'bitnet'
+                config['torch_dtype'] = 'bfloat16'  # ADDED to config
                 config['quantization_config'] = {
                     'quant_method': 'bitnet',
                     'weight_bits': 2,
@@ -343,7 +374,7 @@ Converted BitNet model in SafeTensors format.
 - **Parameters**: {model_analysis['total_parameters']:,}
 - **Architecture**: BitNet with {"H-BitLinear" if model_analysis['has_hbitlinear'] else "BitLinear"} layers
 - **Quantization**: Ternary weights (2-bit), 8-bit activations
-- **Format**: SafeTensors
+- **Format**: SafeTensors (bfloat16)
 
 ## Usage
 
