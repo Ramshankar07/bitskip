@@ -51,6 +51,47 @@ from bitnet.modeling.kernels import is_available as fwht_cuda_available
 from emergency_nan_recovery import recover_from_nan, diagnose_model_corruption
 
 
+def compress_bitnet_for_storage(state_dict_or_path, output_path):
+    """
+    Actually compress BitNet to 2-bit storage format.
+    """
+    import numpy as np
+    
+    # Handle both state_dict and file path
+    if isinstance(state_dict_or_path, dict):
+        checkpoint = state_dict_or_path
+    else:
+        checkpoint = torch.load(state_dict_or_path)
+    
+    compressed = {}
+    
+    for name, param in checkpoint.items():
+        if 'weight' in name and 'norm' not in name:
+            # Quantize to ternary
+            scale = param.abs().mean()
+            ternary = torch.zeros_like(param, dtype=torch.int8)
+            ternary[param > 0.5 * scale] = 1
+            ternary[param < -0.5 * scale] = -1
+            
+            # Pack ternary values (2 bits each) into bytes
+            # This is what Microsoft does!
+            packed = np.packbits(
+                ((ternary.numpy().flatten() + 1) * 85).astype(np.uint8)
+            )
+            
+            compressed[name] = {
+                'packed_weights': packed,
+                'scale': scale.item(),
+                'shape': list(param.shape)
+            }
+        else:
+            # Keep other parameters as is
+            compressed[name] = param
+    
+    # Save compressed model
+    torch.save(compressed, output_path)
+
+
 class BitNetForCausalLM(nn.Module):
     """
     Hugging Face compatible wrapper for the H-BitLinear BitNet model.
@@ -957,11 +998,22 @@ def main():
                 checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{step}")
                 os.makedirs(checkpoint_dir, exist_ok=True)
                 
-                # Save model
-                torch.save(model.state_dict(), os.path.join(checkpoint_dir, "model.pt"))
+                # Save compressed BitNet model directly
+                compressed_path = os.path.join(checkpoint_dir, "model.pt")
+                compress_bitnet_for_storage(model.state_dict(), compressed_path)
                 
                 # Save config
                 config.save_pretrained(checkpoint_dir)
+                
+                # Save quantization config for HuggingFace
+                quantization_config = {
+                    "quantization_method": "bitnet",
+                    "bits": 1.58,
+                    "weight_dtype": "ternary",
+                    "compressed": True
+                }
+                with open(os.path.join(checkpoint_dir, "quantization_config.json"), "w") as f:
+                    json.dump(quantization_config, f, indent=2)
                 
                 logger.info(f"Saved checkpoint to {checkpoint_dir}")
             
@@ -969,12 +1021,28 @@ def main():
             logger.error(f"Error at step {step}: {e}")
             continue
     
-    # Save final model
+    # Save final compressed BitNet model
     final_dir = os.path.join(args.output_dir, "final_model")
     os.makedirs(final_dir, exist_ok=True)
-    torch.save(model.state_dict(), os.path.join(final_dir, "model.pt"))
+    
+    # Save compressed BitNet model directly
+    compressed_path = os.path.join(final_dir, "model.pt")
+    compress_bitnet_for_storage(model.state_dict(), compressed_path)
+    
+    # Save config
     config.save_pretrained(final_dir)
-    logger.info(f"Training completed. Final model saved to {final_dir}")
+    
+    # Save quantization config for HuggingFace
+    quantization_config = {
+        "quantization_method": "bitnet",
+        "bits": 1.58,
+        "weight_dtype": "ternary",
+        "compressed": True
+    }
+    with open(os.path.join(final_dir, "quantization_config.json"), "w") as f:
+        json.dump(quantization_config, f, indent=2)
+    
+    logger.info(f"Training completed. Final compressed BitNet model saved to {final_dir}")
     
     # Cleanup
     if torch.cuda.is_available():

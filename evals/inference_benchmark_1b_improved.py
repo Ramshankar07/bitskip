@@ -28,11 +28,14 @@ import torch.nn.functional as F
 from transformers import AutoTokenizer
 from dotenv import load_dotenv
 
-# Import autocast with compatibility
+# Import for Hugging Face model downloading
 try:
-    from torch.amp import autocast
+    from huggingface_hub import snapshot_download
+    HF_HUB_AVAILABLE = True
 except ImportError:
-    from torch.cuda.amp import autocast
+    HF_HUB_AVAILABLE = False
+
+# Note: Using torch.cuda.amp.autocast directly for proper mixed precision
 
 # Import the improved model
 from bitnet.inference.engine import BitNetInferenceEngine
@@ -81,19 +84,96 @@ class InferenceBenchmark:
             return next(self.model.parameters()).device
         except StopIteration:
             return torch.device('cpu')
+    
+    def _is_huggingface_repo(self, model_path: str) -> bool:
+        """Check if the model path is a Hugging Face repository ID."""
+        return "/" in model_path and not os.path.exists(model_path)
+    
+    def _download_from_huggingface(self, repo_id: str) -> Optional[str]:
+        """Download model from Hugging Face Hub."""
+        if not HF_HUB_AVAILABLE:
+            self.logger.error("huggingface_hub not available. Install with: pip install huggingface_hub")
+            return None
+        
+        try:
+            self.logger.info(f"Downloading model from Hugging Face: {repo_id}")
+            
+            # Download to local cache
+            local_path = snapshot_download(
+                repo_id=repo_id,
+                cache_dir="./models",
+                local_files_only=False
+            )
+            
+            self.logger.info(f"Model downloaded to: {local_path}")
+            return local_path
+            
+        except Exception as e:
+            self.logger.error(f"Failed to download model from HF: {e}")
+            return None
+    
+    def _validate_model_path(self, model_path: str) -> str:
+        """Validate and resolve model path, downloading if necessary."""
+        # Check if it's a Hugging Face repo ID
+        if self._is_huggingface_repo(model_path):
+            self.logger.info(f"Detected Hugging Face repository: {model_path}")
+            downloaded_path = self._download_from_huggingface(model_path)
+            if downloaded_path:
+                return downloaded_path
+            else:
+                raise FileNotFoundError(f"Failed to download model from Hugging Face: {model_path}")
+        
+        # Check if local path exists
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Model path does not exist: {model_path}")
+        
+        # If it's a directory, check for required files
+        if os.path.isdir(model_path):
+            # Check for SafeTensors files
+            safetensors_files = [f for f in os.listdir(model_path) if f.endswith('.safetensors')]
+            if safetensors_files:
+                self.logger.info(f"Found SafeTensors model: {safetensors_files[0]}")
+                return model_path
+            
+            # Check for .pt files
+            pt_files = [f for f in os.listdir(model_path) if f.endswith('.pt')]
+            if pt_files:
+                self.logger.info(f"Found PyTorch model: {pt_files[0]}")
+                return model_path
+            
+            # Check for config.json
+            if os.path.exists(os.path.join(model_path, "config.json")):
+                self.logger.info("Found model directory with config.json")
+                return model_path
+            
+            raise FileNotFoundError(f"No valid model files found in directory: {model_path}")
+        
+        # If it's a file, check if it's a valid model file
+        if os.path.isfile(model_path):
+            if model_path.endswith(('.pt', '.safetensors')):
+                self.logger.info(f"Found model file: {model_path}")
+                return model_path
+            else:
+                raise ValueError(f"Unsupported model file format: {model_path}")
+        
+        raise ValueError(f"Invalid model path: {model_path}")
 
     def load_model(self):
         """Load the BitNet model and tokenizer using the unified engine."""
         self.logger.info(f"Loading model from {self.model_path}")
         
         try:
+            # Validate and resolve model path (download if necessary)
+            resolved_model_path = self._validate_model_path(self.model_path)
+            self.logger.info(f"Resolved model path: {resolved_model_path}")
+            
             # Resolve model directory and model file path
-            if os.path.isfile(self.model_path):
-                model_dir = os.path.dirname(self.model_path)
-                model_file = self.model_path
+            if os.path.isfile(resolved_model_path):
+                model_dir = os.path.dirname(resolved_model_path)
+                model_file = resolved_model_path
                 self.logger.info(f"Model file detected, using directory: {model_dir}")
             else:
-                model_dir = self.model_path
+                model_dir = resolved_model_path
                 model_file = os.path.join(model_dir, "model.pt")
                 self.logger.info(f"Model directory detected: {model_dir}")
             
@@ -112,9 +192,9 @@ class InferenceBenchmark:
             self.model = self.engine.model
             self.tokenizer = self.engine.tokenizer
             
-            # Convert to FP16 for inference efficiency where applicable
-            if torch.cuda.is_available():
-                self.model = self.model.half()
+            # Convert model weights to FP16 for inference efficiency (only weights, not inputs)
+            if torch.cuda.is_available() and self.device == "cuda":
+                self.model = self.model.half().cuda()
                 self.logger.info("Model converted to FP16 for inference")
             
             self.logger.info("Model and tokenizer loaded successfully via engine")
@@ -154,11 +234,13 @@ class InferenceBenchmark:
         tok_out = self.tokenizer(prompt, return_tensors="pt")
         inputs = {k: v.to(self.device) for k, v in tok_out.items()}
         
-        # Convert to FP16 inputs if model is in FP16 (do not change integer tensors)
-        model_dtype = self._model_dtype()
-        if model_dtype == torch.float16:
-            inputs = {k: (v.half() if v.dtype.is_floating_point else v) for k, v in inputs.items()}
+        # Ensure batch dimension is present (should be [1, seq_len])
+        if inputs["input_ids"].dim() == 1:
+            inputs["input_ids"] = inputs["input_ids"].unsqueeze(0)
+        if "attention_mask" in inputs and inputs["attention_mask"].dim() == 1:
+            inputs["attention_mask"] = inputs["attention_mask"].unsqueeze(0)
         
+        # Keep input_ids as integers (token indices) - NEVER convert to FP16
         input_length = inputs["input_ids"].shape[1]
         
         all_metrics = []
@@ -170,15 +252,10 @@ class InferenceBenchmark:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             
-            # Warmup with FP16 autocast
+            # Warmup with proper autocast
             with torch.no_grad():
-                try:
-                    with autocast('cuda'):
-                        _ = self.model(**inputs)
-                except TypeError:
-                    # Fallback for older PyTorch versions
-                    with autocast():
-                        _ = self.model(**inputs)
+                with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+                    _ = self.model(**inputs)
             
             # Actual timing run
             torch.cuda.synchronize() if torch.cuda.is_available() else None
@@ -188,61 +265,31 @@ class InferenceBenchmark:
             token_times = []
             first_token_time = None
             
-            # Generate tokens one by one for precise timing (using engine's cache capability flag)
+            # Generate tokens one by one for precise timing
             with torch.no_grad():
-                current_inputs = inputs
+                current_input_ids = inputs["input_ids"]
                 past_key_values = None
-                next_input_ids = None
                 
                 for step in range(max_new_tokens):
                     step_start = time.time()
                     
-                    # Forward pass with or without KV cache depending on model support
-                    try:
-                        with autocast('cuda'):
-                            if getattr(self.engine, 'supports_kv_cache', False):
-                                if past_key_values is None:
-                                    outputs = self.model(**current_inputs, use_cache=True)
-                                else:
-                                    outputs = self.model(
-                                        input_ids=next_input_ids,
-                                        past_key_values=past_key_values,
-                                        use_cache=True,
-                                    )
-                            else:
-                                # No KV cache: feed full sequence each step, do not pass/use cache
-                                if step == 0:
-                                    outputs = self.model(**current_inputs, use_cache=False)
-                                else:
-                                    # Append last token to sequence for next step
-                                    full_input_ids = torch.cat([current_inputs["input_ids"], next_input_ids], dim=1)
-                                    current_inputs = {
-                                        "input_ids": full_input_ids,
-                                        "attention_mask": torch.ones_like(full_input_ids),
-                                    }
-                                    outputs = self.model(**current_inputs, use_cache=False)
-                    except TypeError:
-                        # Fallback for older PyTorch versions
-                        with autocast():
-                            if getattr(self.engine, 'supports_kv_cache', False):
-                                if past_key_values is None:
-                                    outputs = self.model(**current_inputs, use_cache=True)
-                                else:
-                                    outputs = self.model(
-                                        input_ids=next_input_ids,
-                                        past_key_values=past_key_values,
-                                        use_cache=True,
-                                    )
-                            else:
-                                if step == 0:
-                                    outputs = self.model(**current_inputs, use_cache=False)
-                                else:
-                                    full_input_ids = torch.cat([current_inputs["input_ids"], next_input_ids], dim=1)
-                                    current_inputs = {
-                                        "input_ids": full_input_ids,
-                                        "attention_mask": torch.ones_like(full_input_ids),
-                                    }
-                                    outputs = self.model(**current_inputs, use_cache=False)
+                    # Use proper autocast syntax
+                    with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
+                        if getattr(self.engine, 'supports_kv_cache', False) and past_key_values is not None:
+                            # KV cache: only pass new token after first iteration
+                            outputs = self.model(
+                                input_ids=next_token.unsqueeze(0),  # Only the new token
+                                attention_mask=None,  # Can be None with KV cache
+                                past_key_values=past_key_values,
+                                use_cache=True
+                            )
+                        else:
+                            # First iteration or no KV cache: pass full sequence
+                            outputs = self.model(
+                                input_ids=current_input_ids,
+                                attention_mask=inputs.get("attention_mask"),
+                                use_cache=getattr(self.engine, 'supports_kv_cache', False)
+                            )
                     
                     # Get logits and apply temperature
                     logits = outputs.logits[:, -1, :] / temperature
@@ -280,15 +327,10 @@ class InferenceBenchmark:
                     # Prepare for next iteration
                     if getattr(self.engine, 'supports_kv_cache', False):
                         past_key_values = getattr(outputs, 'past_key_values', None)
-                        next_input_ids = next_token
+                        # For KV cache, we'll use next_token in the next iteration
                     else:
-                        # For no-cache path, we update next_input_ids and keep building full sequence in the loop above
-                        next_input_ids = next_token
-                    
-                    # Convert next_input_ids to FP16 if needed (keep input_ids as long)
-                    if model_dtype == torch.float16 and next_input_ids.dtype == torch.long:
-                        # Keep input_ids as long (integer) type, only convert attention_mask if present
-                        pass
+                        # No KV cache: append token to sequence for next iteration
+                        current_input_ids = torch.cat([current_input_ids, next_token.unsqueeze(0)], dim=1)
             
             torch.cuda.synchronize() if torch.cuda.is_available() else None
             total_time = time.time() - start_time
@@ -308,11 +350,14 @@ class InferenceBenchmark:
             # Tokens per second
             tokens_per_second = num_generated_tokens / total_time if total_time > 0 else 0
             
-            # Inter-Token Latency (ITL) - average time between tokens
-            itl = statistics.mean(token_times[1:]) if len(token_times) > 1 else 0
-            
-            # ITL standard deviation
-            itl_std = statistics.stdev(token_times[1:]) if len(token_times) > 1 else 0
+            # Inter-Token Latency (ITL) - average time between tokens (exclude first token)
+            # ITL should only measure time between subsequent tokens, not including first token generation
+            if len(token_times) > 1:
+                itl = statistics.mean(token_times[1:])  # Exclude first token time
+                itl_std = statistics.stdev(token_times[1:])
+            else:
+                itl = 0
+                itl_std = 0
             
             run_metrics = {
                 'run': run + 1,
@@ -330,6 +375,10 @@ class InferenceBenchmark:
             all_metrics.append(run_metrics)
             
             self.logger.info(f"Run {run + 1}: {num_generated_tokens} tokens, {tokens_per_second:.2f} tok/s, TTFT: {ttft:.4f}s, TPOT: {tpot:.4f}s")
+            
+            # Clear GPU memory after each run
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         
         # Calculate average metrics
         if not all_metrics:
@@ -383,12 +432,10 @@ class InferenceBenchmark:
             self.logger.info(f"Testing Early Exit Threshold: {threshold}")
             self.logger.info(f"{'='*60}")
             
-            # Update model config for this threshold
-            if hasattr(self.model.config, 'early_exit_threshold'):
-                self.model.config.early_exit_threshold = threshold
-                self.logger.info(f"Updated early exit threshold to {threshold}")
-            else:
-                self.logger.warning("Model does not support early exit threshold configuration")
+            # Note: Early exit threshold is typically handled during model forward pass
+            # For BitNet models, this would need to be implemented in the model's forward method
+            # For now, we'll log the threshold but it won't affect generation
+            self.logger.info(f"Testing with early exit threshold: {threshold} (note: may not be implemented in model)")
             
             # Run benchmark
             results = self.generate_with_timing(
@@ -407,6 +454,11 @@ class InferenceBenchmark:
                 self.logger.info(f"  TTFT: {results['ttft_avg']:.4f}s ± {results['ttft_std']:.4f}s")
                 self.logger.info(f"  TPOT: {results['tpot_avg']:.4f}s ± {results['tpot_std']:.4f}s")
                 self.logger.info(f"  ITL: {results['itl_mean_avg']:.4f}s ± {results['itl_mean_std']:.4f}s")
+            
+            # Clear GPU memory after each threshold test
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                self.logger.info("GPU memory cleared after threshold test")
         
         return all_results
     
@@ -505,7 +557,7 @@ def parse_args():
     )
     
     parser.add_argument('--model_path', type=str, required=True,
-                       help='Path to the trained model directory')
+                       help='Path to the trained model directory, model file (.pt/.safetensors), or Hugging Face repo ID (e.g., Ram07/bitnet-1b)')
     parser.add_argument('--device', type=str, default='cuda',
                        help='Device to run inference on (cuda/cpu)')
     parser.add_argument('--max_new_tokens', type=int, default=1000,
@@ -538,6 +590,14 @@ def main():
         model_path=args.model_path,
         device=args.device
     )
+    
+    # Validate model path before starting (this will download if necessary)
+    try:
+        resolved_path = benchmark._validate_model_path(args.model_path)
+        print(f"✅ Model path validated: {resolved_path}")
+    except Exception as e:
+        print(f"❌ Model validation failed: {e}")
+        return
     
     # Load model
     benchmark.load_model()

@@ -45,12 +45,14 @@ class BitNetInferenceEngine:
         # Resolve model file if a directory is provided
         resolved_path = model_path
         if os.path.isdir(model_path):
-            safetensors_path = os.path.join(model_path, "model.safetensors")
-            pt_path = os.path.join(model_path, "model.pt")
-            if os.path.exists(safetensors_path):
-                resolved_path = safetensors_path
-            elif os.path.exists(pt_path):
-                resolved_path = pt_path
+            # Look for SafeTensors files first (any .safetensors file)
+            safetensors_files = [f for f in os.listdir(model_path) if f.endswith('.safetensors')]
+            if safetensors_files:
+                # Use the first SafeTensors file found
+                resolved_path = os.path.join(model_path, safetensors_files[0])
+                print(f"Found SafeTensors file: {safetensors_files[0]}")
+            elif os.path.exists(os.path.join(model_path, "model.pt")):
+                resolved_path = os.path.join(model_path, "model.pt")
             else:
                 raise FileNotFoundError(f"No checkpoint found in directory: {model_path}")
         
