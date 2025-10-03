@@ -238,8 +238,8 @@ class BitNetInferenceEngine:
         """Detect whether this is BitNetModel or BitNetModel2."""
         # BitNetModel2 uses H-BitLinear layers
         for key in state_dict.keys():
-            if "h_bitlinear" in key.lower() or "hadamard" in key.lower():
-                return "bitnet2"
+                if "h_bitlinear" in key.lower() or "hadamard" in key.lower():
+                    return "bitnet2"
         return "bitnet"
     
     def _infer_config_from_state_dict(self, state_dict: Dict[str, torch.Tensor]) -> None:
@@ -725,6 +725,6 @@ class BitNetInferenceEngine:
     
     def clear_cache(self) -> None:
         """Clear the KV cache."""
-        self.kv_cache = None
+        self.kv_cache = None 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

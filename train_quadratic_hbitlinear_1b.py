@@ -923,10 +923,12 @@ def main():
                 checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{step}")
                 os.makedirs(checkpoint_dir, exist_ok=True)
                 
-                # Save compressed BitNet model directly
-                compressed_path = os.path.join(checkpoint_dir, "model.pt")
-                compress_bitnet_for_storage(model.state_dict(), compressed_path)
-                
+            # Save UNCOMPRESSED full state dict for downstream conversion
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'config': config.to_dict(),
+                }, os.path.join(checkpoint_dir, "model_full.pt"))
+                    
                 # Save config
                 config.save_pretrained(checkpoint_dir)
                 
@@ -950,9 +952,11 @@ def main():
     final_dir = os.path.join(args.output_dir, "final_model")
     os.makedirs(final_dir, exist_ok=True)
     
-    # Save compressed BitNet model directly
-    compressed_path = os.path.join(final_dir, "model.pt")
-    compress_bitnet_for_storage(model.state_dict(), compressed_path)
+    # Save UNCOMPRESSED full state dict for downstream conversion
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'config': config.to_dict(),
+    }, os.path.join(final_dir, "model_full.pt"))
     
     # Save config
     config.save_pretrained(final_dir)
