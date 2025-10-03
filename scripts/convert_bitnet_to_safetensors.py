@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
 """
-BitNet to SafeTensors Converter Script
-Converts all BitNet .pt models to SafeTensors format for use with HuggingFace transformers
-
-This script:
-1. Scans for BitNet model directories
-2. Converts .pt models to SafeTensors format
-3. Saves converted models in organized folders
-4. Creates metadata files for each conversion
-
-Usage:
-    python scripts/convert_bitnet_to_safetensors.py [--input-dir ./] [--output-dir ./safetensors_models]
+Fixed BitNet to SafeTensors Converter Script
+Properly handles BitNet model state dicts and preserves quantization information.
 """
 
 import os
@@ -18,11 +9,10 @@ import json
 import argparse
 import logging
 import shutil
-import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import torch
-import numpy as np
+from datetime import datetime
 
 try:
     from safetensors.torch import save_file, load_file
@@ -31,7 +21,7 @@ except ImportError:
     SAFETENSORS_AVAILABLE = False
 
 class BitNetToSafeTensorsConverter:
-    """Converts BitNet .pt models to SafeTensors format."""
+    """Properly converts BitNet .pt models to SafeTensors format."""
     
     def __init__(self, input_dir: str = "./", output_dir: str = "./safetensors_models"):
         self.input_dir = Path(input_dir)
@@ -61,301 +51,341 @@ class BitNetToSafeTensorsConverter:
         }
     
     def find_bitnet_models(self) -> List[Dict]:
-        """Find all BitNet model directories."""
+        """Find all BitNet model files."""
         models = []
         
-        # Check if input_dir is a specific model directory
-        if (self.input_dir / "config.json").exists() and (self.input_dir / "model.pt").exists():
-            # This is a specific model directory
-            model_name = self.input_dir.name
-            if "final_model" in str(self.input_dir):
-                # Extract parent directory name for model name
-                parent_name = self.input_dir.parent.name
-                if "hbitlinear" in parent_name:
-                    model_name = f"hbitlinear-{self._extract_size_from_path(self.input_dir.parent)}"
-                elif "bitnet" in parent_name:
-                    model_name = f"bitnet-{self._extract_size_from_path(self.input_dir.parent)}"
-                else:
-                    model_name = parent_name
-            
-            models.append({
-                'path': str(self.input_dir),
-                'name': model_name,
-                'config_path': str(self.input_dir / "config.json"),
-                'model_path': str(self.input_dir / "model.pt")
-            })
-            self.logger.info(f"Found specific BitNet model: {model_name} at {self.input_dir}")
-            return models
-        
-        # Look for common BitNet output directories
         search_patterns = [
-            "output-bitnet-1b/final_model",
-            "output-quadratic-2b-hf/final_model", 
-            "output-bitnet-hbitlinear-1b/final_model",
-            "output-quadratic-hbitlinear-2b-hf/final_model",
-            "final_model",  # Generic final_model directories
+            "*/final_model/model.pt",
         ]
         
+        found_files = set()
         for pattern in search_patterns:
-            model_path = self.input_dir / pattern
-            if model_path.exists():
-                config_path = model_path / "config.json"
-                model_pt_path = model_path / "model.pt"
-                
-                if config_path.exists() and model_pt_path.exists():
-                    # Determine model name from directory structure
-                    if "hbitlinear" in str(model_path):
-                        model_name = f"hbitlinear-{self._extract_size_from_path(model_path)}"
-                    elif "bitnet" in str(model_path):
-                        model_name = f"bitnet-{self._extract_size_from_path(model_path)}"
-                    else:
-                        model_name = model_path.parent.name
+            for model_path in self.input_dir.glob(pattern):
+                if model_path.is_file() and str(model_path) not in found_files:
+                    found_files.add(str(model_path))
+                    
+                    # Try to find associated config
+                    config_path = model_path.parent / "config.json"
+                    
+                    # Determine model name
+                    model_name = self._determine_model_name(model_path)
                     
                     models.append({
-                        'path': str(model_path),
+                        'path': str(model_path.parent),
                         'name': model_name,
-                        'config_path': str(config_path),
-                        'model_path': str(model_pt_path)
+                        'config_path': str(config_path) if config_path.exists() else None,
+                        'model_path': str(model_path)
                     })
-                    self.logger.info(f"Found BitNet model: {model_name} at {model_path}")
-        
-        # Also search recursively for any final_model directories
-        for root, dirs, files in os.walk(self.input_dir):
-            if "final_model" in dirs:
-                final_model_path = Path(root) / "final_model"
-                config_path = final_model_path / "config.json"
-                model_pt_path = final_model_path / "model.pt"
-                
-                if config_path.exists() and model_pt_path.exists():
-                    # Check if we already found this model
-                    already_found = any(m['path'] == str(final_model_path) for m in models)
-                    if not already_found:
-                        model_name = f"model-{len(models)+1}"
-                        models.append({
-                            'path': str(final_model_path),
-                            'name': model_name,
-                            'config_path': str(config_path),
-                            'model_path': str(model_pt_path)
-                        })
-                        self.logger.info(f"Found additional BitNet model: {model_name} at {final_model_path}")
+                    self.logger.info(f"Found model: {model_name} at {model_path}")
         
         return models
     
-    def _clean_state_dict(self, state_dict: Dict) -> Dict:
-        """Clean state dict to remove duplicate tensors and handle memory sharing."""
-        cleaned_dict = {}
-        seen_tensors = {}
+    def _determine_model_name(self, model_path: Path) -> str:
+        """Determine a meaningful name for the model."""
+        path_str = str(model_path).lower()
         
-        # Priority order for tensor names (prefer shorter names)
-        priority_keys = [
-            'lm_head.weight', 'embed_tokens.weight', 'embed_positions.weight',
-            'q_proj.weight', 'k_proj.weight', 'v_proj.weight', 'o_proj.weight',
-            'gate_proj.weight', 'up_proj.weight', 'down_proj.weight'
-        ]
-        
-        # First pass: add priority keys and clone tensors to break memory sharing
-        for key in priority_keys:
-            if key in state_dict:
-                tensor = state_dict[key]
-                if isinstance(tensor, torch.Tensor):
-                    # Clone the tensor to break memory sharing
-                    cleaned_dict[key] = tensor.clone().detach()
-                    seen_tensors[id(tensor)] = key
+        # Extract info from path
+        if "checkpoint-" in path_str:
+            # Extract checkpoint number
+            import re
+            match = re.search(r'checkpoint-(\d+)', path_str)
+            if match:
+                checkpoint_num = match.group(1)
+                if "hbitlinear" in path_str:
+                    return f"bitnet-hbitlinear-checkpoint-{checkpoint_num}"
                 else:
-                    cleaned_dict[key] = tensor
+                    return f"bitnet-checkpoint-{checkpoint_num}"
         
-        # Second pass: add remaining keys, cloning tensors to break memory sharing
-        for key, tensor in state_dict.items():
-            if key not in cleaned_dict:
-                if isinstance(tensor, torch.Tensor):
-                    # Check if this tensor shares memory with any already processed tensor
-                    tensor_id = id(tensor)
-                    if tensor_id in seen_tensors:
-                        self.logger.warning(f"Skipping duplicate tensor: {key} (shares memory with {seen_tensors[tensor_id]})")
-                    else:
-                        # Clone the tensor to break memory sharing
-                        cleaned_dict[key] = tensor.clone().detach()
-                        seen_tensors[tensor_id] = key
-                else:
-                    cleaned_dict[key] = tensor
+        if "final_model" in path_str:
+            parent_dir = model_path.parent.parent.name
+            if "hbitlinear" in parent_dir:
+                size = self._extract_size_from_path(model_path)
+                return f"bitnet-hbitlinear-{size}-final"
+            elif "bitnet" in parent_dir:
+                size = self._extract_size_from_path(model_path)
+                return f"bitnet-{size}-final"
+            else:
+                return f"{parent_dir}-final"
         
-        self.logger.info(f"Cleaned state dict: {len(cleaned_dict)} tensors (removed {len(state_dict) - len(cleaned_dict)} duplicates)")
-        return cleaned_dict
+        # Default: use parent directory name
+        return model_path.parent.name
     
     def _extract_size_from_path(self, path: Path) -> str:
-        """Extract model size from path (1b, 2b, etc.)."""
+        """Extract model size from path."""
         path_str = str(path).lower()
-        if "1b" in path_str:
-            return "1b"
-        elif "2b" in path_str:
-            return "2b"
-        elif "3b" in path_str:
-            return "3b"
-        else:
-            return "unknown"
+        for size in ["1b", "2b", "3b", "7b", "13b"]:
+            if size in path_str:
+                return size
+        return "unknown"
     
     def load_bitnet_model(self, model_info: Dict) -> Optional[Dict]:
-        """Load BitNet model and config."""
+        """Properly load BitNet model state dict."""
         try:
-            # Load config
-            with open(model_info['config_path'], 'r') as f:
-                config = json.load(f)
+            # Load model checkpoint
+            self.logger.info(f"Loading model from {model_info['model_path']}...")
+            checkpoint = torch.load(model_info['model_path'], map_location='cpu')
             
-            # Load model state dict
-            state_dict = torch.load(model_info['model_path'], map_location='cpu')
+            # Extract state dict based on checkpoint format
+            state_dict = None
+            metadata = {}
+            
+            if isinstance(checkpoint, dict):
+                # Common checkpoint formats
+                if 'model_state_dict' in checkpoint:
+                    state_dict = checkpoint['model_state_dict']
+                    metadata = {k: v for k, v in checkpoint.items() 
+                               if k != 'model_state_dict' and not k.endswith('state_dict')}
+                elif 'state_dict' in checkpoint:
+                    state_dict = checkpoint['state_dict']
+                    metadata = {k: v for k, v in checkpoint.items() 
+                               if k != 'state_dict' and not k.endswith('state_dict')}
+                elif 'model' in checkpoint:
+                    state_dict = checkpoint['model']
+                    metadata = {k: v for k, v in checkpoint.items() if k != 'model'}
+                else:
+                    # Assume the dict itself is the state dict
+                    # Check if it contains tensor keys
+                    if any(isinstance(v, torch.Tensor) for v in checkpoint.values()):
+                        state_dict = checkpoint
+                    else:
+                        self.logger.error(f"Cannot find state dict in checkpoint keys: {checkpoint.keys()}")
+                        return None
+            else:
+                # Direct state dict (older format)
+                state_dict = checkpoint
+            
+            if state_dict is None:
+                self.logger.error("Could not extract state dict from checkpoint")
+                return None
+            
+            # Load config if available
+            config = {}
+            if model_info['config_path']:
+                try:
+                    with open(model_info['config_path'], 'r') as f:
+                        config = json.load(f)
+                except Exception as e:
+                    self.logger.warning(f"Could not load config: {e}")
+            
+            # Analyze model architecture from state dict
+            model_analysis = self._analyze_model_architecture(state_dict)
             
             return {
-                'config': config,
                 'state_dict': state_dict,
-                'model_info': model_info
+                'config': config,
+                'metadata': metadata,
+                'model_info': model_info,
+                'model_analysis': model_analysis
             }
             
         except Exception as e:
             self.logger.error(f"Failed to load model {model_info['name']}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
+    
+    def _analyze_model_architecture(self, state_dict: Dict) -> Dict:
+        """Analyze model architecture from state dict."""
+        analysis = {
+            'total_parameters': 0,
+            'layers': {},
+            'has_bitlinear': False,
+            'has_hbitlinear': False,
+            'quantization_info': {}
+        }
+        
+        for key, tensor in state_dict.items():
+            if isinstance(tensor, torch.Tensor):
+                analysis['total_parameters'] += tensor.numel()
+                
+                # Detect layer types
+                if 'BitLinear' in key or 'bitlinear' in key.lower():
+                    analysis['has_bitlinear'] = True
+                if 'HBitLinear' in key or 'hbitlinear' in key.lower():
+                    analysis['has_hbitlinear'] = True
+                
+                # Extract layer info
+                layer_name = key.split('.')[0] if '.' in key else key
+                if layer_name not in analysis['layers']:
+                    analysis['layers'][layer_name] = []
+                analysis['layers'][layer_name].append(key)
+                
+                # Check for quantization scales
+                if 'weight_scale' in key or 'activation_scale' in key:
+                    analysis['quantization_info'][key] = {
+                        'shape': list(tensor.shape),
+                        'values': tensor.cpu().numpy().tolist() if tensor.numel() < 10 else 'too_large'
+                    }
+        
+        return analysis
+    
+    def _process_state_dict_for_safetensors(self, state_dict: Dict) -> Dict:
+        """Process state dict to ensure compatibility with SafeTensors."""
+        processed = {}
+        
+        for key, value in state_dict.items():
+            if isinstance(value, torch.Tensor):
+                # Ensure tensor is contiguous and on CPU
+                tensor = value.cpu().contiguous()
+                
+                # Handle different dtypes
+                if tensor.dtype == torch.bfloat16:
+                    # Convert bfloat16 to float16 for better compatibility
+                    self.logger.warning(f"Converting {key} from bfloat16 to float16")
+                    tensor = tensor.to(torch.float16)
+                
+                # Clone to ensure no memory sharing
+                processed[key] = tensor.clone()
+            else:
+                # Skip non-tensor values (SafeTensors only stores tensors)
+                self.logger.debug(f"Skipping non-tensor value: {key}")
+        
+        return processed
     
     def convert_to_safetensors(self, model_data: Dict) -> bool:
         """Convert BitNet model to SafeTensors format."""
         try:
             model_info = model_data['model_info']
-            config = model_data['config']
             state_dict = model_data['state_dict']
+            config = model_data.get('config', {})
+            metadata = model_data.get('metadata', {})
+            model_analysis = model_data.get('model_analysis', {})
             
-            self.logger.info(f"Converting {model_info['name']} to SafeTensors format...")
+            self.logger.info(f"Converting {model_info['name']} to SafeTensors...")
+            self.logger.info(f"  Total parameters: {model_analysis['total_parameters']:,}")
+            self.logger.info(f"  Has BitLinear: {model_analysis['has_bitlinear']}")
+            self.logger.info(f"  Has HBitLinear: {model_analysis['has_hbitlinear']}")
             
-            # Create output directory for this model
+            # Create output directory
             model_output_dir = self.output_dir / model_info['name']
             model_output_dir.mkdir(parents=True, exist_ok=True)
             
-            # Create SafeTensors file
-            safetensors_filename = f"{model_info['name']}.safetensors"
-            safetensors_path = model_output_dir / safetensors_filename
+            # Process state dict for SafeTensors
+            processed_state_dict = self._process_state_dict_for_safetensors(state_dict)
             
-            # Convert state dict to SafeTensors format
-            self.logger.info(f"Saving model weights to SafeTensors format...")
-            
-            # Clean state dict to remove duplicate tensors
-            cleaned_state_dict = self._clean_state_dict(state_dict)
-            
-            save_file(cleaned_state_dict, str(safetensors_path))
-            
-            # Copy config.json to output directory
-            config_output_path = model_output_dir / "config.json"
-            shutil.copy2(model_info['config_path'], config_output_path)
-            
-            # Create conversion metadata
-            metadata = {
-                'original_path': model_info['path'],
-                'conversion_date': str(Path().cwd()),
-                'original_config': config,
-                'model_size_mb': os.path.getsize(model_info['model_path']) / (1024 * 1024),
-                'safetensors_file': safetensors_filename,
-                'conversion_method': 'bitnet_to_safetensors_converter',
-                'format': 'safetensors'
+            # Create metadata for SafeTensors file
+            safetensors_metadata = {
+                'format': 'pt',
+                'model_type': 'bitnet',
+                'total_parameters': str(model_analysis['total_parameters']),
+                'has_bitlinear': str(model_analysis['has_bitlinear']),
+                'has_hbitlinear': str(model_analysis['has_hbitlinear']),
+                'conversion_date': datetime.now().isoformat(),
+                'converter_version': '1.0.0'
             }
             
-            metadata_path = model_output_dir / "conversion_metadata.json"
-            with open(metadata_path, 'w') as f:
-                json.dump(metadata, f, indent=2)
             
-            # Create a README for the converted model
-            readme_content = self._create_readme(model_info, config, metadata)
-            readme_path = model_output_dir / "README.md"
-            with open(readme_path, 'w') as f:
-                f.write(readme_content)
+            # Save to SafeTensors
+            safetensors_path = model_output_dir / "model.safetensors"
+            save_file(processed_state_dict, str(safetensors_path), metadata=safetensors_metadata)
             
-            self.logger.info(f"✅ Successfully converted {model_info['name']} to SafeTensors")
-            self.logger.info(f"   Output directory: {model_output_dir}")
-            self.logger.info(f"   SafeTensors file: {safetensors_path}")
+            self.logger.info(f"  Saved SafeTensors: {safetensors_path}")
+            self.logger.info(f"  File size: {safetensors_path.stat().st_size / (1024**2):.2f} MB")
+            
+            # Save config if available
+            if config:
+                config_path = model_output_dir / "config.json"
+                
+                # Add BitNet-specific fields to config
+                config['model_type'] = 'bitnet'
+                config['quantization_config'] = {
+                    'quant_method': 'bitnet',
+                    'weight_bits': 2,
+                    'activation_bits': 8
+                }
+                
+                with open(config_path, 'w') as f:
+                    json.dump(config, f, indent=2)
+                self.logger.info(f"  Saved config: {config_path}")
+            
+            # Create model card
+            self._create_model_card(model_output_dir, model_info, model_analysis, safetensors_metadata)
+            
+            # Save conversion info
+            conversion_info = {
+                'original_path': model_info['model_path'],
+                'conversion_date': datetime.now().isoformat(),
+                'model_analysis': model_analysis,
+                'safetensors_metadata': safetensors_metadata,
+                'file_sizes': {
+                    'original_mb': Path(model_info['model_path']).stat().st_size / (1024**2),
+                    'safetensors_mb': safetensors_path.stat().st_size / (1024**2)
+                }
+            }
+            
+            info_path = model_output_dir / "conversion_info.json"
+            with open(info_path, 'w') as f:
+                json.dump(conversion_info, f, indent=2)
             
             return True
             
         except Exception as e:
             self.logger.error(f"Failed to convert {model_info['name']}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
-    
-    def _create_readme(self, model_info: Dict, config: Dict, metadata: Dict) -> str:
-        """Create README for converted model."""
-        return f"""# {model_info['name']} - SafeTensors Format
+    def _create_model_card(self, output_dir: Path, model_info: Dict, model_analysis: Dict, metadata: Dict):
+        """Create a model card for the converted model."""
+        readme_content = f"""---
+tags:
+- bitnet
+- quantization
+- safetensors
+---
 
-This is a SafeTensors-converted version of the original BitNet model.
+# {model_info['name']}
 
-## Original Model Info
-- **Name**: {model_info['name']}
-- **Original Path**: {model_info['path']}
-- **Model Size**: {metadata['model_size_mb']:.1f} MB
+Converted BitNet model in SafeTensors format.
 
-## Model Configuration
-- **Vocabulary Size**: {config.get('vocab_size', 'Unknown')}
-- **Hidden Size**: {config.get('hidden_size', 'Unknown')}
-- **Number of Layers**: {config.get('num_hidden_layers', 'Unknown')}
-- **Attention Heads**: {config.get('num_attention_heads', 'Unknown')}
-- **Activation Bits**: {config.get('activation_bits', 'Unknown')}
-- **Weight Bits**: {config.get('weight_bits', 'Unknown')}
+## Model Details
 
-## Files
-- `{model_info['name']}.safetensors` - Main model file (SafeTensors format)
-- `config.json` - Original model configuration
-- `conversion_metadata.json` - Conversion details
-- `README.md` - This file
+- **Parameters**: {model_analysis['total_parameters']:,}
+- **Architecture**: BitNet with {"H-BitLinear" if model_analysis['has_hbitlinear'] else "BitLinear"} layers
+- **Quantization**: Ternary weights (2-bit), 8-bit activations
+- **Format**: SafeTensors
 
-## Usage with HuggingFace Transformers
+## Usage
 
 ```python
-from transformers import AutoTokenizer, AutoModelForCausalLM
 from safetensors.torch import load_file
 import torch
 
-# Load tokenizer
-tokenizer = AutoTokenizer.from_pretrained(".")
+# Load the model
+state_dict = load_file("model.safetensors")
 
-# Load model weights from SafeTensors
-state_dict = load_file("{model_info['name']}.safetensors")
+# Initialize your BitNet model architecture
+model = YourBitNetModel(config)  # Replace with your model initialization
 
-# Create model instance and load weights
-model = AutoModelForCausalLM.from_pretrained(".", state_dict=state_dict)
+# Load the weights
+model.load_state_dict(state_dict)
 
-# Generate text
-prompt = "The future of AI is"
-inputs = tokenizer(prompt, return_tensors="pt")
-
+# Use the model
+model.eval()
 with torch.no_grad():
-    outputs = model.generate(**inputs, max_new_tokens=100)
-    
-generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-print(generated_text)
+    output = model(input_ids)
 ```
 
-## Usage with SafeTensors directly
+## Files
 
-```python
-from safetensors.torch import load_file
-
-# Load model weights
-state_dict = load_file("{model_info['name']}.safetensors")
-
-# Access individual tensors
-for key, tensor in state_dict.items():
-    print(f"{{key}}: {{tensor.shape}} - {{tensor.dtype}}")
-```
-
-## Benefits of SafeTensors
-- **Memory Safety**: Prevents arbitrary code execution
-- **Cross-platform**: Works across different architectures
-- **Fast Loading**: Optimized for quick model loading
-- **HuggingFace Compatible**: Native support in transformers library
+- `model.safetensors` - Model weights in SafeTensors format
+- `config.json` - Model configuration (if available)
+- `conversion_info.json` - Details about the conversion
 
 ## Conversion Details
-- **Conversion Date**: {metadata['conversion_date']}
-- **Conversion Method**: {metadata['conversion_method']}
-- **Original Model Size**: {metadata['model_size_mb']:.1f} MB
-- **Format**: SafeTensors
+
+- **Converted on**: {metadata.get('conversion_date', 'Unknown')}
+- **Original format**: PyTorch (.pt)
+- **Converter version**: {metadata.get('converter_version', 'Unknown')}
 """
+        
+        readme_path = output_dir / "README.md"
+        with open(readme_path, 'w') as f:
+            f.write(readme_content)
     
     def convert_all_models(self) -> Dict:
-        """Convert all found BitNet models to SafeTensors."""
-        self.logger.info("🔍 Scanning for BitNet models...")
+        """Convert all found BitNet models."""
+        self.logger.info("Scanning for BitNet models...")
         
         models = self.find_bitnet_models()
         self.conversion_results['total_models'] = len(models)
@@ -364,10 +394,10 @@ for key, tensor in state_dict.items():
             self.logger.warning("No BitNet models found!")
             return self.conversion_results
         
-        self.logger.info(f"Found {len(models)} BitNet models to convert")
+        self.logger.info(f"Found {len(models)} model(s) to convert")
         
         for i, model_info in enumerate(models, 1):
-            self.logger.info(f"\n📦 Converting model {i}/{len(models)}: {model_info['name']}")
+            self.logger.info(f"\n[{i}/{len(models)}] Processing: {model_info['name']}")
             
             # Load model
             model_data = self.load_bitnet_model(model_info)
@@ -398,39 +428,26 @@ for key, tensor in state_dict.items():
                     'error': 'Conversion failed'
                 })
         
-        # Save conversion summary
+        # Save summary
+        self._save_conversion_summary()
+        
+        return self.conversion_results
+    
+    def _save_conversion_summary(self):
+        """Save and display conversion summary."""
         summary_path = self.output_dir / "conversion_summary.json"
         with open(summary_path, 'w') as f:
             json.dump(self.conversion_results, f, indent=2)
         
-        # Print summary
-        self._print_conversion_summary()
-        
-        return self.conversion_results
-    
-    def _print_conversion_summary(self):
-        """Print conversion summary."""
-        self.logger.info("\n" + "="*80)
-        self.logger.info("🎯 BITNET TO SAFETENSORS CONVERSION SUMMARY")
-        self.logger.info("="*80)
-        
-        self.logger.info(f"📊 Total Models Found: {self.conversion_results['total_models']}")
-        self.logger.info(f"✅ Successful Conversions: {self.conversion_results['successful_conversions']}")
-        self.logger.info(f"❌ Failed Conversions: {self.conversion_results['failed_conversions']}")
-        
-        self.logger.info(f"\n📁 Output Directory: {self.output_dir}")
-        
-        if self.conversion_results['conversions']:
-            self.logger.info("\n📋 Conversion Details:")
-            for conv in self.conversion_results['conversions']:
-                status_emoji = "✅" if conv['status'] == 'success' else "❌"
-                self.logger.info(f"   {status_emoji} {conv['model_name']}: {conv['status']}")
-                if conv['status'] == 'success':
-                    self.logger.info(f"      Output: {conv['output_path']}")
-                elif 'error' in conv:
-                    self.logger.info(f"      Error: {conv['error']}")
-        
-        self.logger.info("="*80)
+        print("\n" + "="*60)
+        print("CONVERSION SUMMARY")
+        print("="*60)
+        print(f"Total models found: {self.conversion_results['total_models']}")
+        print(f"Successful: {self.conversion_results['successful_conversions']}")
+        print(f"Failed: {self.conversion_results['failed_conversions']}")
+        print(f"\nOutput directory: {self.output_dir}")
+        print(f"Summary saved to: {summary_path}")
+        print("="*60)
 
 
 def main():
@@ -439,22 +456,16 @@ def main():
     parser.add_argument("--input-dir", type=str, default="./",
                        help="Input directory to search for BitNet models")
     parser.add_argument("--output-dir", type=str, default="./safetensors_models",
-                       help="Output directory for converted SafeTensors models")
+                       help="Output directory for converted models")
     
     args = parser.parse_args()
     
-    # Create converter
     converter = BitNetToSafeTensorsConverter(
         input_dir=args.input_dir,
         output_dir=args.output_dir
     )
     
-    # Convert all models
-    results = converter.convert_all_models()
-    
-    print(f"\n✅ Conversion completed!")
-    print(f"📁 Check output directory: {args.output_dir}")
-    print(f"📊 Summary saved to: {args.output_dir}/conversion_summary.json")
+    converter.convert_all_models()
 
 
 if __name__ == "__main__":

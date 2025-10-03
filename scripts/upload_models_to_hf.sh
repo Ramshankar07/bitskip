@@ -88,7 +88,15 @@ for name in "${!MODEL_DIRS[@]}"; do
   # Upload SafeTensors files at repo root
   upload_file "${MODEL_PATH}/config.json" "$REPO_ID" "config.json"
   upload_file "${MODEL_PATH}/README.md" "$REPO_ID" "README.md"
-  upload_file "${MODEL_PATH}/conversion_metadata.json" "$REPO_ID" "conversion_metadata.json"
+  
+  # Upload conversion info (try both possible names)
+  if [[ -f "${MODEL_PATH}/conversion_info.json" ]]; then
+    upload_file "${MODEL_PATH}/conversion_info.json" "$REPO_ID" "conversion_info.json"
+  elif [[ -f "${MODEL_PATH}/conversion_metadata.json" ]]; then
+    upload_file "${MODEL_PATH}/conversion_metadata.json" "$REPO_ID" "conversion_metadata.json"
+  else
+    echo "[WARN] No conversion info file found in ${MODEL_PATH}" >&2
+  fi
   
   # Upload the .safetensors file (find the exact filename)
   SAFETENSORS_FILE=$(find "${MODEL_PATH}" -name "*.safetensors" -type f | head -1)
