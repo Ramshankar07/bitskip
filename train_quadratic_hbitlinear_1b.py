@@ -58,7 +58,7 @@ def compress_bitnet_for_storage(state_dict_or_path, output_path):
             # Pack ternary values (2 bits each) into bytes
             # This is what Microsoft does!
             packed = np.packbits(
-                ((ternary.numpy().flatten() + 1) * 85).astype(np.uint8)
+                ((ternary.cpu().numpy().flatten() + 1) * 85).astype(np.uint8)
             )
             
             compressed[name] = {
