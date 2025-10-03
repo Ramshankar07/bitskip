@@ -51,10 +51,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 declare -A MODEL_DIRS
-MODEL_DIRS[bitnet-1b]="${REPO_ROOT}/safetensors_models/bitnet-1b"
-MODEL_DIRS[bitnet-2b]="${REPO_ROOT}/safetensors_models/bitnet-2b"
-MODEL_DIRS[hbitlinear-1b]="${REPO_ROOT}/safetensors_models/hbitlinear-1b"
-MODEL_DIRS[hbitlinear-2b]="${REPO_ROOT}/safetensors_models/hbitlinear-2b"
+# Updated to match converter outputs (see conversion_summary.json)
+MODEL_DIRS[bitnet-1b]="${REPO_ROOT}/safetensors_models/bitnet-1b-final"
+MODEL_DIRS[bitnet-2b]="${REPO_ROOT}/safetensors_models/output-quadratic-2b-hf-final"
+MODEL_DIRS[hbitlinear-1b]="${REPO_ROOT}/safetensors_models/bitnet-hbitlinear-1b-final"
+MODEL_DIRS[hbitlinear-2b]="${REPO_ROOT}/safetensors_models/bitnet-hbitlinear-2b-final"
 
 upload_file() {
   local file_path="$1"
