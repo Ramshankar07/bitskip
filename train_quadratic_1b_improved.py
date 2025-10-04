@@ -873,9 +873,41 @@ def main():
                 checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{step}")
                 os.makedirs(checkpoint_dir, exist_ok=True)
                 
+            # Get the internal BitNet model (unwrap the wrapper)
+                internal_model = model.model  # BitNetForCausalLM -> BitNetModel
+                
+                # Get complete state dict with ALL parameters
+                state_dict = internal_model.state_dict()
+                
+                logger.info(f"Saving checkpoint with {len(state_dict)} keys")
+                
+                # Verify we have the critical weights before saving
+                has_attn = any('q_proj.weight' in k and 'weight_scale' not in k for k in state_dict.keys())
+                has_embed = any('embed_tokens.weight' in k for k in state_dict.keys())
+                has_ffn = any('up_proj.weight' in k and 'weight_scale' not in k for k in state_dict.keys())
+                
+                if not has_attn:
+                    logger.error("CRITICAL: BitLinear attention weights missing from internal model!")
+                    logger.error("This will create an incomplete checkpoint!")
+                    # Try to save the wrapper's full state instead
+                    logger.warning("Falling back to wrapper model.state_dict()")
+                    state_dict = model.state_dict()
+                elif not has_embed:
+                    logger.error("CRITICAL: Embedding weights missing from internal model!")
+                    logger.error("Falling back to wrapper model.state_dict()")
+                    state_dict = model.state_dict()
+                elif not has_ffn:
+                    logger.error("CRITICAL: Feedforward weights missing from internal model!")
+                    logger.error("Falling back to wrapper model.state_dict()")
+                    state_dict = model.state_dict()
+                else:
+                    # Test our debug script would pass validation
+                    logger.info(f"✓ Checkpoint validation: Has embeddings={has_embed}, attention={has_attn}, FFN={has_ffn}")
+                
             # Save UNCOMPRESSED full state dict for downstream conversion
                 torch.save({
-                    'model_state_dict': model.state_dict(),
+                    'model_state_dict': state_dict,
+                    'step': step,
                     'config': config.to_dict(),
                 }, os.path.join(checkpoint_dir, "model_full.pt"))
                     
@@ -902,9 +934,40 @@ def main():
     final_dir = os.path.join(args.output_dir, "final_model")
     os.makedirs(final_dir, exist_ok=True)
     
+    # Get the internal BitNet model (unwrap the wrapper)
+    internal_model = model.model  # BitNetForCausalLM -> BitNetModel
+    
+    # Get complete state dict with ALL parameters
+    state_dict = internal_model.state_dict()
+    
+    logger.info(f"Saving final model with {len(state_dict)} keys")
+    
+    # Verify we have the critical weights before saving
+    has_attn = any('q_proj.weight' in k and 'weight_scale' not in k for k in state_dict.keys())
+    has_embed = any('embed_tokens.weight' in k for k in state_dict.keys())
+    has_ffn = any('up_proj.weight' in k and 'weight_scale' not in k for k in state_dict.keys())
+    
+    if not has_attn:
+        logger.error("CRITICAL: BitLinear attention weights missing from internal model!")
+        logger.error("This will create an incomplete checkpoint!")
+        # Try to save the wrapper's full state instead
+        logger.warning("Falling back to wrapper model.state_dict()")
+        state_dict = model.state_dict()
+    elif not has_embed:
+        logger.error("CRITICAL: Embedding weights missing from internal model!")
+        logger.error("Falling back to wrapper model.state_dict()")
+        state_dict = model.state_dict()
+    elif not has_ffn:
+        logger.error("CRITICAL: Feedforward weights missing from internal model!")
+        logger.error("Falling back to wrapper model.state_dict()")
+        state_dict = model.state_dict()
+    else:
+        # Test our debug script would pass validation
+        logger.info(f"✓ Final model validation: Has embeddings={has_embed}, attention={has_attn}, FFN={has_ffn}")
+    
     # Save UNCOMPRESSED full state dict for downstream conversion
     torch.save({
-        'model_state_dict': model.state_dict(),
+        'model_state_dict': state_dict,
         'config': config.to_dict(),
     }, os.path.join(final_dir, "model_full.pt"))
     
