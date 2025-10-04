@@ -216,11 +216,23 @@ class BitNetCheckpointDebugger:
             layer_0_keys = [k for k in state_dict.keys() if k.startswith('layers.0.')]
             print(f"  Layer 0 has {len(layer_0_keys)} keys")
             
-            # Check for attention weights
-            has_q = any('q_proj.weight' in k for k in layer_0_keys)
-            has_k = any('k_proj.weight' in k for k in layer_0_keys)
-            has_v = any('v_proj.weight' in k for k in layer_0_keys)
-            has_o = any('o_proj.weight' in k for k in layer_0_keys)
+            # Debug: Show ALL layer 0 keys if found
+            if layer_0_keys:
+                print(f"  Sample layer 0 keys: {layer_0_keys[:5]}")
+            else:
+                # Check for model.layers.0. prefix instead
+                model_layer_keys = [k for k in state_dict.keys() if 'layers.0.' in k]
+                print(f"  Found {len(model_layer_keys)} keys with 'layers.0.' in them")
+                if model_layer_keys:
+                    print(f"  Sample model.layers.0. keys: {model_layer_keys[:5]}")
+            
+            # Check for attention weights - use model_layer_keys if layer_0_keys is empty
+            search_keys = model_layer_keys if len(layer_0_keys) == 0 else layer_0_keys
+            
+            has_q = any('q_proj.weight' in k for k in search_keys)
+            has_k = any('k_proj.weight' in k for k in search_keys)
+            has_v = any('v_proj.weight' in k for k in search_keys)
+            has_o = any('o_proj.weight' in k for k in search_keys)
             
             print(f"    Attention projections: q={has_q}, k={has_k}, v={has_v}, o={has_o}")
             if not all([has_q, has_k, has_v, has_o]):
@@ -228,8 +240,8 @@ class BitNetCheckpointDebugger:
                 all_checks_passed = False
             
             # Check for feedforward weights
-            has_up = any('up_proj.weight' in k for k in layer_0_keys)
-            has_down = any('down_proj.weight' in k for k in layer_0_keys)
+            has_up = any('up_proj.weight' in k for k in search_keys)
+            has_down = any('down_proj.weight' in k for k in search_keys)
             
             print(f"    Feedforward projections: up={has_up}, down={has_down}")
             if not all([has_up, has_down]):

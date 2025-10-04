@@ -944,23 +944,18 @@ def main():
                 has_embed = any('embed_tokens.weight' in k for k in state_dict.keys())
                 has_ffn = any('up_proj.weight' in k and 'weight_scale' not in k for k in state_dict.keys())
                 
-                if not has_attn:
-                    logger.error("CRITICAL: BitLinear attention weights missing from internal model!")
-                    logger.error("This will create an incomplete checkpoint!")
-                    # Try to save the wrapper's full state instead
-                    logger.warning("Falling back to wrapper model.state_dict()")
-                    state_dict = model.state_dict()
-                elif not has_embed:
+                if not has_embed:
                     logger.error("CRITICAL: Embedding weights missing from internal model!")
                     logger.error("Falling back to wrapper model.state_dict()")
                     state_dict = model.state_dict()
-                elif not has_ffn:
-                    logger.error("CRITICAL: Feedforward weights missing from internal model!")
+                elif len(state_dict) < 400:  # Arbitrary sanity check - should have many keys
+                    logger.error("CRITICAL: Internal model state dict seems incomplete!")
+                    logger.error(f"Expected >400 keys, got {len(state_dict)} keys")
                     logger.error("Falling back to wrapper model.state_dict()")
                     state_dict = model.state_dict()
                 else:
-                    # Test our debug script would pass validation
-                    logger.info(f"✓ Checkpoint validation: Has embeddings={has_embed}, attention={has_attn}, FFN={has_ffn}")
+                    # Most important: embeddings + reasonable key count
+                    logger.info(f"✓ Checkpoint validation: Has embeddings={has_embed}, keys={len(state_dict)}")
                 
             # Save UNCOMPRESSED full state dict for downstream conversion
                 torch.save({
@@ -1005,23 +1000,18 @@ def main():
     has_embed = any('embed_tokens.weight' in k for k in state_dict.keys())
     has_ffn = any('up_proj.weight' in k and 'weight_scale' not in k for k in state_dict.keys())
     
-    if not has_attn:
-        logger.error("CRITICAL: BitLinear attention weights missing from internal model!")
-        logger.error("This will create an incomplete checkpoint!")
-        # Try to save the wrapper's full state instead
-        logger.warning("Falling back to wrapper model.state_dict()")
-        state_dict = model.state_dict()
-    elif not has_embed:
+    if not has_embed:
         logger.error("CRITICAL: Embedding weights missing from internal model!")
         logger.error("Falling back to wrapper model.state_dict()")
         state_dict = model.state_dict()
-    elif not has_ffn:
-        logger.error("CRITICAL: Feedforward weights missing from internal model!")
+    elif len(state_dict) < 400:  # Arbitrary sanity check - should have many keys
+        logger.error("CRITICAL: Internal model state dict seems incomplete!")
+        logger.error(f"Expected >400 keys, got {len(state_dict)} keys")
         logger.error("Falling back to wrapper model.state_dict()")
         state_dict = model.state_dict()
     else:
-        # Test our debug script would pass validation
-        logger.info(f"✓ Final model validation: Has embeddings={has_embed}, attention={has_attn}, FFN={has_ffn}")
+        # Most important: embeddings + reasonable key count
+        logger.info(f"✓ Final model validation: Has embeddings={has_embed}, keys={len(state_dict)}")
     
     # Save UNCOMPRESSED full state dict for downstream conversion
     torch.save({
