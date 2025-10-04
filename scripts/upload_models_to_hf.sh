@@ -15,9 +15,9 @@ set -euo pipefail
 #
 # Repos created/used:
 #   Ram07/bitnet-1b
-#   Ram07/bitnet-2b
-#   Ram07/hbitlinear-1b
-#   Ram07/hbitlinear-2b
+#   Ram07/bitnet-2b  
+#   Ram07/hbitnet-1b
+#   Ram07/hbitnet-2b
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -51,11 +51,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 declare -A MODEL_DIRS
-# Updated to match converter outputs (see conversion_summary.json)
-MODEL_DIRS[bitnet-1b]="${REPO_ROOT}/safetensors_models/bitnet-1b-final"
-MODEL_DIRS[bitnet-2b]="${REPO_ROOT}/safetensors_models/output-quadratic-2b-hf-final"
-MODEL_DIRS[hbitlinear-1b]="${REPO_ROOT}/safetensors_models/bitnet-hbitlinear-1b-final"
-MODEL_DIRS[hbitlinear-2b]="${REPO_ROOT}/safetensors_models/bitnet-hbitlinear-2b-final"
+# Updated to match your new directory structure
+MODEL_DIRS[bitnet-1b]="${REPO_ROOT}/safetensors/bitnet-1b"
+MODEL_DIRS[bitnet-2b]="${REPO_ROOT}/safetensors/bitnet-2b"
+MODEL_DIRS[hbitlinear-1b]="${REPO_ROOT}/safetensors/hbitnet-1b"
+MODEL_DIRS[hbitlinear-2b]="${REPO_ROOT}/safetensors/hbitnet-2b"
 
 upload_file() {
   local file_path="$1"
