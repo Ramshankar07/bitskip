@@ -1,434 +1,556 @@
-#!/usr/bin/env python3
 """
-HuggingFace Transformers Benchmark Script for LayerSkip Llama3.2-1B Model
-Measures TPOT, TTFT, tokens/sec, ITL using direct HuggingFace inference
+LayerSkip with Dynamic Confidence-Based Early Exit
 
-This script benchmarks the LayerSkip Llama3.2-1B model using HuggingFace transformers with:
-- Time Per Output Token (TPOT)
-- Time To First Token (TTFT) 
-- Tokens per second
-- Inter-Token Latency (ITL)
-- Throughput analysis
-- Memory usage monitoring
-- Direct inference without server
+This implementation allows the model to exit at different layers based on 
+confidence thresholds, rather than using a fixed exit layer.
+
+Confidence metrics:
+1. Max probability (softmax confidence)
+2. Entropy-based confidence
+3. Margin-based confidence (difference between top-2 predictions)
 """
-
-import os
-import time
-import json
-import argparse
-import logging
-import statistics
-import threading
-from typing import Dict, List, Tuple, Optional
-from pathlib import Path
-import psutil
-
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
 
 import torch
+import torch.nn.functional as F
+from typing import Dict, List, Optional, Tuple
+import time
+import statistics
+import logging
+import numpy as np
 
-class HuggingFaceLayerSkipBenchmark:
-    """Comprehensive HuggingFace transformers benchmark for LayerSkip Llama3.2-1B model."""
+
+class ConfidenceMetrics:
+    """Calculate various confidence metrics for early exit decisions."""
     
-    def __init__(self, model_name: str = "RichardErkhov/facebook_-_layerskip-llama3.2-1B-gguf", 
-                 model_file: str = "layerskip-llama3.2-1B.Q2_K.gguf"):
-        self.model_name = model_name
-        self.model_file = model_file
+    @staticmethod
+    def max_probability(logits: torch.Tensor) -> float:
+        """
+        Maximum softmax probability.
+        Higher is more confident.
+        Range: [0, 1]
+        """
+        probs = F.softmax(logits, dim=-1)
+        max_prob = probs.max().item()
+        return max_prob
+    
+    @staticmethod
+    def entropy(logits: torch.Tensor) -> float:
+        """
+        Entropy of the probability distribution.
+        Lower entropy = more confident.
+        Normalized to [0, 1] where 1 = most confident.
+        """
+        probs = F.softmax(logits, dim=-1)
+        entropy = -(probs * torch.log(probs + 1e-10)).sum().item()
         
-        # Setup logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
+        # Normalize by max possible entropy
+        vocab_size = logits.shape[-1]
+        max_entropy = np.log(vocab_size)
+        
+        # Convert to confidence (invert entropy)
+        confidence = 1.0 - (entropy / max_entropy)
+        return confidence
+    
+    @staticmethod
+    def margin(logits: torch.Tensor) -> float:
+        """
+        Margin between top-2 predictions.
+        Larger margin = more confident.
+        Normalized to [0, 1].
+        """
+        probs = F.softmax(logits, dim=-1)
+        top2 = torch.topk(probs, k=2, dim=-1)
+        margin = (top2.values[0] - top2.values[1]).item()
+        
+        # Margin is in [0, 1] already
+        return margin
+    
+    @staticmethod
+    def calculate_all(logits: torch.Tensor) -> Dict[str, float]:
+        """Calculate all confidence metrics."""
+        return {
+            'max_prob': ConfidenceMetrics.max_probability(logits),
+            'entropy_conf': ConfidenceMetrics.entropy(logits),
+            'margin': ConfidenceMetrics.margin(logits)
+        }
+
+
+class DynamicEarlyExitBenchmark:
+    """
+    LayerSkip with dynamic confidence-based early exit.
+    
+    The model checks confidence at each layer and exits when
+    confidence exceeds threshold, rather than using a fixed exit layer.
+    """
+    
+    def __init__(
+        self, 
+        model, 
+        tokenizer, 
+        device: str = "cuda",
+        confidence_metric: str = "max_prob"
+    ):
+        """
+        Args:
+            model: LayerSkip model
+            tokenizer: Tokenizer
+            device: Device to use
+            confidence_metric: Metric to use for confidence
+                Options: 'max_prob', 'entropy_conf', 'margin'
+        """
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = device
+        self.confidence_metric = confidence_metric
         self.logger = logging.getLogger(__name__)
         
-        # Test prompts for benchmarking
-        self.test_prompts = [
-            "The future of artificial intelligence is",
-            "In a world where technology advances rapidly,",
-            "The key to successful machine learning is",
-            "Quantum computing represents a paradigm shift because",
-            "The intersection of neuroscience and AI",
-            "Sustainable energy solutions require",
-            "The evolution of programming languages shows",
-            "Understanding human consciousness through",
-            "The challenges of climate change demand",
-            "Innovation in healthcare technology enables"
-        ]
-        
-        # Performance metrics storage
-        self.results = {
-            'model_info': {
-                'model_name': model_name,
-                'model_file': model_file,
-                'inference_method': 'huggingface_transformers'
-            },
-            'metrics': {},
-            'system_info': self._get_system_info()
-        }
-        
-        self.model = None
-        self.tokenizer = None
-        self.device = None
+        # Get number of layers
+        self.num_layers = self._get_num_layers()
+        self.logger.info(f"Model has {self.num_layers} layers")
+        self.logger.info(f"Using confidence metric: {confidence_metric}")
     
-    def _get_system_info(self) -> Dict:
-        """Get system information for benchmarking context."""
-        info = {
-            'cpu_count': psutil.cpu_count(),
-            'memory_gb': psutil.virtual_memory().total / (1024**3),
-            'python_version': f"{psutil.sys.version_info.major}.{psutil.sys.version_info.minor}.{psutil.sys.version_info.micro}",
-            'platform': 'windows' if os.name == 'nt' else 'linux'
-        }
+    def _get_num_layers(self) -> int:
+        """Get number of transformer layers."""
+        if hasattr(self.model, 'config'):
+            return getattr(self.model.config, 'num_hidden_layers', 32)
+        return 32
+    
+    def _project_to_vocab(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Project hidden states to vocabulary logits using LM head."""
+        # Apply final layer norm (if model has it)
+        if hasattr(self.model, 'model') and hasattr(self.model.model, 'norm'):
+            hidden_states = self.model.model.norm(hidden_states)
+        elif hasattr(self.model, 'transformer') and hasattr(self.model.transformer, 'ln_f'):
+            hidden_states = self.model.transformer.ln_f(hidden_states)
         
-        # GPU information
-        if torch.cuda.is_available():
-            info['gpu_count'] = torch.cuda.device_count()
-            info['gpu_info'] = []
-            for i in range(torch.cuda.device_count()):
-                props = torch.cuda.get_device_properties(i)
-                info['gpu_info'].append({
-                    'name': props.name,
-                    'memory_total': props.total_memory / (1024**3),
-                    'compute_capability': f"{props.major}.{props.minor}"
-                })
+        # Project through LM head
+        if hasattr(self.model, 'lm_head'):
+            logits = self.model.lm_head(hidden_states)
+        elif hasattr(self.model, 'score'):
+            logits = self.model.score(hidden_states)
         else:
-            info['gpu_info'] = []
+            raise AttributeError("Model doesn't have lm_head")
         
-        return info
+        return logits
     
-    def load_model(self):
-        """Load the LayerSkip model using HuggingFace transformers."""
-        try:
-            self.logger.info(f"Loading model: {self.model_name}")
+    def _calculate_confidence(
+        self, 
+        logits: torch.Tensor,
+        metric: Optional[str] = None
+    ) -> float:
+        """
+        Calculate confidence score for logits.
+        
+        Args:
+            logits: Model logits
+            metric: Confidence metric to use (None = use default)
             
-            # Check if model is already downloaded locally
-            local_model_path = f"./models/models--{self.model_name.replace('/', '--')}"
-            if os.path.exists(local_model_path):
-                self.logger.info(f"Found local model at: {local_model_path}")
+        Returns:
+            Confidence score in [0, 1]
+        """
+        if metric is None:
+            metric = self.confidence_metric
+        
+        # Get confidence
+        if metric == "max_prob":
+            return ConfidenceMetrics.max_probability(logits)
+        elif metric == "entropy_conf":
+            return ConfidenceMetrics.entropy(logits)
+        elif metric == "margin":
+            return ConfidenceMetrics.margin(logits)
+        else:
+            raise ValueError(f"Unknown confidence metric: {metric}")
+    
+    def generate_with_dynamic_exit(
+        self,
+        prompt: str,
+        confidence_threshold: float,
+        max_new_tokens: int = 100,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        min_exit_layer: int = 0,
+        max_exit_layer: Optional[int] = None
+    ) -> Dict:
+        """
+        Generate tokens with dynamic confidence-based early exit.
+        
+        Args:
+            prompt: Input prompt
+            confidence_threshold: Confidence threshold for early exit (0-1)
+            max_new_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            top_p: Top-p sampling
+            min_exit_layer: Minimum layer to consider for exit
+            max_exit_layer: Maximum layer to consider (None = last layer)
+            
+        Returns:
+            Generation results with exit statistics
+        """
+        if max_exit_layer is None:
+            max_exit_layer = self.num_layers - 1
+        
+        # Validate parameters
+        if not 0 <= confidence_threshold <= 1:
+            raise ValueError("confidence_threshold must be in [0, 1]")
+        if min_exit_layer < 0 or min_exit_layer >= self.num_layers:
+            raise ValueError(f"min_exit_layer must be in [0, {self.num_layers-1}]")
+        if max_exit_layer < min_exit_layer or max_exit_layer >= self.num_layers:
+            raise ValueError(f"max_exit_layer must be in [{min_exit_layer}, {self.num_layers-1}]")
+        
+        # Tokenize input
+        inputs = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
+        if self.device != "cpu":
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs.get("attention_mask", None)
+        
+        generated_tokens = []
+        token_times = []
+        exit_layers = []  # Track which layer each token exited from
+        exit_confidences = []  # Track confidence at exit
+        
+        self.model.eval()
+        
+        with torch.no_grad():
+            for step in range(max_new_tokens):
+                # Synchronize before timing
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                step_start = time.time()
                 
-                # Look for the GGUF file
-                gguf_path = None
-                for root, dirs, files in os.walk(local_model_path):
-                    for file in files:
-                        if file.endswith('.gguf'):
-                            gguf_path = os.path.join(root, file)
-                            break
-                    if gguf_path:
+                # Run full forward pass to get all hidden states
+                outputs = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    output_hidden_states=True,
+                    return_dict=True
+                )
+                
+                # Check each layer for confidence threshold
+                exited = False
+                exit_layer = max_exit_layer  # Default to last layer
+                exit_confidence = 0.0
+                
+                for layer_idx in range(min_exit_layer, max_exit_layer + 1):
+                    # Get hidden states at this layer
+                    # Note: hidden_states[0] is embedding, hidden_states[i+1] is layer i output
+                    hidden_state = outputs.hidden_states[layer_idx + 1]
+                    
+                    # Project to vocabulary
+                    logits = self._project_to_vocab(hidden_state)
+                    
+                    # Get logits for last position
+                    next_token_logits = logits[:, -1, :]
+                    
+                    # Calculate confidence
+                    confidence = self._calculate_confidence(next_token_logits)
+                    
+                    # Check if we can exit early
+                    if confidence >= confidence_threshold:
+                        exit_layer = layer_idx
+                        exit_confidence = confidence
+                        exited = True
                         break
                 
-                if gguf_path:
-                    self.logger.info(f"Found GGUF file: {gguf_path}")
-                    self.logger.info("Using GGUF model with llama-cpp-python")
+                # If we didn't exit early, use last layer
+                if not exited:
+                    hidden_state = outputs.hidden_states[-1]
+                    logits = self._project_to_vocab(hidden_state)
+                    next_token_logits = logits[:, -1, :]
+                    exit_confidence = self._calculate_confidence(next_token_logits)
+                
+                # Apply temperature
+                next_token_logits = next_token_logits / temperature
+                
+                # Apply top-p filtering
+                if top_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                    sorted_indices_to_remove = cumulative_probs > top_p
+                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                    sorted_indices_to_remove[..., 0] = 0
+                    indices_to_remove = sorted_indices_to_remove.scatter(1, sorted_indices, sorted_indices_to_remove)
+                    next_token_logits[indices_to_remove] = float('-inf')
+                
+                # Sample next token
+                probs = F.softmax(next_token_logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+                
+                # Synchronize after generation
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                step_end = time.time()
+                
+                # Record metrics
+                token_times.append(step_end - step_start)
+                exit_layers.append(exit_layer)
+                exit_confidences.append(exit_confidence)
+                
+                # Check for EOS
+                if next_token.item() == self.tokenizer.eos_token_id:
+                    break
+                
+                generated_tokens.append(next_token.item())
+                
+                # Append to input_ids for next iteration
+                input_ids = torch.cat([input_ids, next_token], dim=1)
+                
+                # Update attention mask
+                if attention_mask is not None:
+                    attention_mask = torch.cat(
+                        [attention_mask, torch.ones((attention_mask.shape[0], 1),
+                                                   dtype=attention_mask.dtype,
+                                                   device=attention_mask.device)],
+                        dim=1
+                    )
+        
+        # Calculate metrics
+        num_tokens = len(generated_tokens)
+        if num_tokens == 0:
+            return {}
+        
+        total_time = sum(token_times)
+        
+        # Calculate exit layer distribution
+        from collections import Counter
+        exit_distribution = Counter(exit_layers)
+        exit_dist_pct = {
+            layer: count / len(exit_layers)
+            for layer, count in exit_distribution.items()
+        }
+        
+        return {
+            'confidence_threshold': confidence_threshold,
+            'confidence_metric': self.confidence_metric,
+            'num_tokens': num_tokens,
+            'generated_text': self.tokenizer.decode(generated_tokens, skip_special_tokens=True),
+            'token_times': token_times,
+            'exit_layers': exit_layers,
+            'exit_confidences': exit_confidences,
+            'avg_exit_layer': statistics.mean(exit_layers),
+            'std_exit_layer': statistics.stdev(exit_layers) if len(exit_layers) > 1 else 0,
+            'min_exit_layer': min(exit_layers),
+            'max_exit_layer': max(exit_layers),
+            'avg_confidence': statistics.mean(exit_confidences),
+            'exit_distribution': exit_dist_pct,
+            'total_time': total_time,
+            'ttft_ms': token_times[0] * 1000 if token_times else 0,
+            'avg_tpot_ms': (total_time / num_tokens) * 1000,
+            'tokens_per_second': num_tokens / total_time,
+            'itl_mean_ms': statistics.mean(token_times[1:]) * 1000 if len(token_times) > 1 else 0
+        }
+    
+    def benchmark_confidence_thresholds(
+        self,
+        prompt: str,
+        confidence_thresholds: List[float],
+        max_new_tokens: int = 100,
+        num_runs: int = 5
+    ) -> Dict:
+        """
+        Benchmark different confidence thresholds.
+        
+        Args:
+            prompt: Input prompt
+            confidence_thresholds: List of thresholds to test (e.g., [0.5, 0.7, 0.9, 0.95])
+            max_new_tokens: Maximum tokens per generation
+            num_runs: Number of runs per threshold
+            
+        Returns:
+            Results for all thresholds
+        """
+        self.logger.info(
+            f"Benchmarking {len(confidence_thresholds)} confidence thresholds "
+            f"with {num_runs} runs each"
+        )
+        
+        all_results = {}
+        
+        for threshold in confidence_thresholds:
+            self.logger.info(f"\n{'='*60}")
+            self.logger.info(f"Testing Confidence Threshold: {threshold:.2f}")
+            self.logger.info(f"{'='*60}")
+            
+            run_results = []
+            
+            for run in range(num_runs):
+                try:
+                    result = self.generate_with_dynamic_exit(
+                        prompt=prompt,
+                        confidence_threshold=threshold,
+                        max_new_tokens=max_new_tokens
+                    )
                     
-                    # Use llama-cpp-python for GGUF models
-                    try:
-                        from llama_cpp import Llama
-                        
-                        # Load the GGUF model
-                        self.model = Llama(
-                            model_path=gguf_path,
-                            n_ctx=2048,  # Context length
-                            n_threads=4,  # CPU threads
-                            verbose=False
+                    if result:
+                        run_results.append(result)
+                        self.logger.info(
+                            f"  Run {run+1}: {result['tokens_per_second']:.2f} tok/s, "
+                            f"Avg exit layer: {result['avg_exit_layer']:.1f}, "
+                            f"Avg confidence: {result['avg_confidence']:.3f}"
                         )
-                        
-                        # Create a simple tokenizer wrapper
-                        self.tokenizer = None  # llama-cpp handles tokenization internally
-                        self.device = "cpu"  # llama-cpp runs on CPU
-                        
-                        self.logger.info(f"✅ GGUF model loaded successfully from: {gguf_path}")
-                        return True
-                        
-                    except ImportError:
-                        self.logger.error("llama-cpp-python not installed. Install with: pip install llama-cpp-python")
-                        return False
-                else:
-                    self.logger.warning("No GGUF file found in local model directory.")
-                    return False
-            else:
-                self.logger.warning("Local model not found.")
-                return False
+                except Exception as e:
+                    self.logger.error(f"  Run {run+1} failed: {e}")
+                    continue
             
-        except Exception as e:
-            self.logger.error(f"Failed to load model: {e}")
-            return False
+            if run_results:
+                # Calculate averages
+                all_results[f'threshold_{threshold:.2f}'] = {
+                    'threshold': threshold,
+                    'num_runs': len(run_results),
+                    'avg_tokens_per_second': statistics.mean([r['tokens_per_second'] for r in run_results]),
+                    'std_tokens_per_second': statistics.stdev([r['tokens_per_second'] for r in run_results]) if len(run_results) > 1 else 0,
+                    'avg_exit_layer': statistics.mean([r['avg_exit_layer'] for r in run_results]),
+                    'std_exit_layer': statistics.stdev([r['avg_exit_layer'] for r in run_results]) if len(run_results) > 1 else 0,
+                    'avg_confidence': statistics.mean([r['avg_confidence'] for r in run_results]),
+                    'avg_ttft_ms': statistics.mean([r['ttft_ms'] for r in run_results]),
+                    'avg_tpot_ms': statistics.mean([r['avg_tpot_ms'] for r in run_results]),
+                    'exit_distribution': run_results[0]['exit_distribution'],
+                    'sample_output': run_results[0]['generated_text'][:200],
+                    'individual_runs': run_results
+                }
+                
+                self.logger.info(
+                    f"\nThreshold {threshold:.2f} Summary:\n"
+                    f"  Throughput: {all_results[f'threshold_{threshold:.2f}']['avg_tokens_per_second']:.2f} tok/s\n"
+                    f"  Avg Exit Layer: {all_results[f'threshold_{threshold:.2f}']['avg_exit_layer']:.1f}\n"
+                    f"  Exit Distribution: {all_results[f'threshold_{threshold:.2f}']['exit_distribution']}"
+                )
+        
+        return all_results
     
-    def generate_text(self, prompt: str, max_tokens: int = 100, temperature: float = 0.7,
-                     top_p: float = 0.9) -> Dict:
-        """Generate text using llama-cpp-python for GGUF models."""
-        try:
-            # Generate using llama-cpp-python
-            start_time = time.time()
+    def compare_confidence_metrics(
+        self,
+        prompt: str,
+        threshold: float = 0.8,
+        max_new_tokens: int = 50,
+        num_runs: int = 3
+    ) -> Dict:
+        """
+        Compare different confidence metrics.
+        
+        Tests max_prob, entropy_conf, and margin metrics.
+        """
+        metrics = ['max_prob', 'entropy_conf', 'margin']
+        results = {}
+        
+        for metric in metrics:
+            self.logger.info(f"\nTesting metric: {metric}")
             
-            output = self.model(
-                prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                top_p=top_p,
-                stop=["</s>", "\n\n"],  # Stop tokens
-                echo=False  # Don't echo the prompt
+            # Temporarily change metric
+            original_metric = self.confidence_metric
+            self.confidence_metric = metric
+            
+            # Run benchmark
+            run_results = []
+            for run in range(num_runs):
+                result = self.generate_with_dynamic_exit(
+                    prompt=prompt,
+                    confidence_threshold=threshold,
+                    max_new_tokens=max_new_tokens
+                )
+                if result:
+                    run_results.append(result)
+            
+            # Restore original metric
+            self.confidence_metric = original_metric
+            
+            if run_results:
+                results[metric] = {
+                    'avg_tokens_per_second': statistics.mean([r['tokens_per_second'] for r in run_results]),
+                    'avg_exit_layer': statistics.mean([r['avg_exit_layer'] for r in run_results]),
+                    'avg_confidence': statistics.mean([r['avg_confidence'] for r in run_results])
+                }
+        
+        # Print comparison
+        print("\n" + "="*80)
+        print("CONFIDENCE METRIC COMPARISON")
+        print("="*80)
+        print(f"{'Metric':<20} {'Tok/s':<15} {'Avg Exit Layer':<20} {'Avg Confidence':<15}")
+        print("-"*80)
+        
+        for metric, metrics_data in results.items():
+            print(
+                f"{metric:<20} "
+                f"{metrics_data['avg_tokens_per_second']:>7.2f}        "
+                f"{metrics_data['avg_exit_layer']:>7.1f}             "
+                f"{metrics_data['avg_confidence']:>7.3f}"
             )
-            
-            end_time = time.time()
-            
-            # Extract generated text
-            if 'choices' in output and len(output['choices']) > 0:
-                generated_text = output['choices'][0]['text']
-            else:
-                self.logger.warning("No choices in model output")
-                return None
-            
-            # Calculate tokens (approximate)
-            # llama-cpp-python doesn't provide exact token counts, so we estimate
-            generated_tokens = len(generated_text.split())  # Rough estimate
-            total_tokens = len(prompt.split()) + generated_tokens
-            
-            return {
-                'text': generated_text,
-                'generation_time': end_time - start_time,
-                'tokens_generated': generated_tokens,
-                'total_tokens': total_tokens
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Text generation failed: {e}")
-            # Try to reset the model state if possible
-            try:
-                if hasattr(self.model, 'reset'):
-                    self.model.reset()
-            except:
-                pass
-            return None
-    
-    def benchmark_single_request(self, prompt: str, max_tokens: int = 100, 
-                               num_runs: int = 5) -> Dict:
-        """Benchmark a single request multiple times."""
-        self.logger.info(f"Benchmarking prompt: '{prompt[:50]}...'")
-        
-        metrics = {
-            'prompt': prompt,
-            'max_tokens': max_tokens,
-            'num_runs': num_runs,
-            'generation_times': [],
-            'tokens_generated': [],
-            'throughputs': []
-        }
-        
-        for run in range(num_runs):
-            self.logger.info(f"Run {run + 1}/{num_runs}")
-            
-            result = self.generate_text(prompt, max_tokens)
-            
-            if result:
-                generation_time = result['generation_time']
-                tokens_generated = result['tokens_generated']
-                throughput = tokens_generated / max(generation_time, 0.001)
-                
-                metrics['generation_times'].append(generation_time)
-                metrics['tokens_generated'].append(tokens_generated)
-                metrics['throughputs'].append(throughput)
-                
-                self.logger.info(f"  Generated {tokens_generated} tokens in {generation_time:.3f}s ({throughput:.1f} tok/s)")
-            else:
-                self.logger.warning(f"  Run {run + 1} failed")
-        
-        # Calculate statistics
-        if metrics['generation_times']:
-            metrics['avg_generation_time'] = statistics.mean(metrics['generation_times'])
-            metrics['std_generation_time'] = statistics.stdev(metrics['generation_times']) if len(metrics['generation_times']) > 1 else 0
-            metrics['avg_throughput'] = statistics.mean(metrics['throughputs'])
-            metrics['std_throughput'] = statistics.stdev(metrics['throughputs']) if len(metrics['throughputs']) > 1 else 0
-            metrics['avg_tokens'] = statistics.mean(metrics['tokens_generated'])
-            metrics['std_tokens'] = statistics.stdev(metrics['tokens_generated']) if len(metrics['tokens_generated']) > 1 else 0
-        
-        return metrics
-    
-    def benchmark_throughput(self, num_concurrent: int = 1, num_requests: int = 10) -> Dict:
-        """Benchmark throughput with sequential requests (avoiding concurrent issues)."""
-        self.logger.info(f"Benchmarking throughput: {num_concurrent} concurrent, {num_requests} total requests")
-        
-        results = {
-            'num_concurrent': num_concurrent,
-            'num_requests': num_requests,
-            'request_times': [],
-            'successful_requests': 0,
-            'failed_requests': 0,
-            'total_tokens': 0
-        }
-        
-        start_time = time.time()
-        
-        # Sequential requests to avoid memory access violations
-        for i in range(num_requests):
-            prompt = self.test_prompts[i % len(self.test_prompts)]
-            self.logger.info(f"Request {i+1}/{num_requests}: '{prompt[:30]}...'")
-            
-            request_start = time.time()
-            result = self.generate_text(prompt, max_tokens=50)
-            request_end = time.time()
-            
-            if result:
-                request_time = request_end - request_start
-                results['request_times'].append(request_time)
-                results['successful_requests'] += 1
-                results['total_tokens'] += result['tokens_generated']
-                self.logger.info(f"  Generated {result['tokens_generated']} tokens in {request_time:.3f}s")
-            else:
-                results['failed_requests'] += 1
-                self.logger.warning(f"  Request {i+1} failed")
-        
-        total_time = time.time() - start_time
-        
-        # Calculate throughput metrics
-        if results['request_times']:
-            results['total_time'] = total_time
-            results['avg_request_time'] = statistics.mean(results['request_times'])
-            results['requests_per_second'] = results['successful_requests'] / total_time
-            results['tokens_per_second'] = results['total_tokens'] / total_time
-            results['success_rate'] = results['successful_requests'] / num_requests
+        print("="*80)
         
         return results
-    
-    def run_comprehensive_benchmark(self, output_file: str = "huggingface_layerskip_benchmark_results.json"):
-        """Run comprehensive benchmark suite."""
-        self.logger.info("🚀 Starting HuggingFace LayerSkip benchmark")
-        
-        # Load model
-        if not self.load_model():
-            self.logger.error("Failed to load model, aborting benchmark")
-            return
-        
-        try:
-            # Single request benchmarks
-            self.logger.info("📊 Running single request benchmarks...")
-            single_results = {}
-            
-            for i, prompt in enumerate(self.test_prompts[:5]):  # Test first 5 prompts
-                single_results[f'prompt_{i+1}'] = self.benchmark_single_request(
-                    prompt, max_tokens=100, num_runs=3
-                )
-            
-            self.results['metrics']['single_requests'] = single_results
-            
-            # Throughput benchmarks
-            self.logger.info("📈 Running throughput benchmarks...")
-            throughput_results = {}
-            
-            # Use sequential requests to avoid memory access violations
-            throughput_results['sequential'] = self.benchmark_throughput(
-                num_concurrent=1, num_requests=10
-            )
-            
-            self.results['metrics']['throughput'] = throughput_results
-            
-            # Memory usage during benchmark
-            self.logger.info("💾 Recording memory usage...")
-            memory_info = self._get_memory_usage()
-            self.results['metrics']['memory_usage'] = memory_info
-            
-            # Save results
-            self.logger.info(f"💾 Saving results to {output_file}")
-            with open(output_file, 'w') as f:
-                json.dump(self.results, f, indent=2)
-            
-            # Print summary
-            self._print_benchmark_summary()
-            
-        except Exception as e:
-            self.logger.error(f"Benchmark failed: {e}")
-    
-    def _get_memory_usage(self) -> Dict:
-        """Get current memory usage."""
-        memory_info = {
-            'system_memory': {
-                'total_gb': psutil.virtual_memory().total / (1024**3),
-                'available_gb': psutil.virtual_memory().available / (1024**3),
-                'used_gb': psutil.virtual_memory().used / (1024**3),
-                'percent_used': psutil.virtual_memory().percent
-            }
-        }
-        
-        if torch.cuda.is_available():
-            memory_info['gpu_memory'] = []
-            for i in range(torch.cuda.device_count()):
-                memory_info['gpu_memory'].append({
-                    'device': i,
-                    'memory_allocated_gb': torch.cuda.memory_allocated(i) / (1024**3),
-                    'memory_reserved_gb': torch.cuda.memory_reserved(i) / (1024**3),
-                    'memory_total_gb': torch.cuda.get_device_properties(i).total_memory / (1024**3)
-                })
-        
-        return memory_info
-    
-    def _print_benchmark_summary(self):
-        """Print benchmark summary."""
-        self.logger.info("\n" + "="*80)
-        self.logger.info("🎯 HUGGINGFACE LAYERSKIP BENCHMARK SUMMARY")
-        self.logger.info("="*80)
-        
-        if 'single_requests' in self.results['metrics']:
-            single_reqs = self.results['metrics']['single_requests']
-            avg_gen_time = statistics.mean([req.get('avg_generation_time', 0) for req in single_reqs.values()])
-            avg_throughput = statistics.mean([req.get('avg_throughput', 0) for req in single_reqs.values()])
-            
-            self.logger.info(f"📊 Single Request Performance:")
-            self.logger.info(f"   Average Generation Time: {avg_gen_time:.3f}s")
-            self.logger.info(f"   Average Throughput: {avg_throughput:.1f} tokens/s")
-        
-        if 'throughput' in self.results['metrics']:
-            throughput = self.results['metrics']['throughput']
-            self.logger.info(f"\n📈 Throughput Performance:")
-            for concurrent, result in throughput.items():
-                if 'requests_per_second' in result:
-                    self.logger.info(f"   {concurrent}: {result['requests_per_second']:.2f} req/s "
-                                   f"({result['success_rate']*100:.1f}% success)")
-        
-        self.logger.info(f"\n💾 Memory Usage:")
-        if 'memory_usage' in self.results['metrics']:
-            mem = self.results['metrics']['memory_usage']
-            if 'system_memory' in mem:
-                sys_mem = mem['system_memory']
-                self.logger.info(f"   System: {sys_mem['used_gb']:.1f}GB / {sys_mem['total_gb']:.1f}GB "
-                               f"({sys_mem['percent_used']:.1f}%)")
-            
-            if 'gpu_memory' in mem and mem['gpu_memory']:
-                for gpu in mem['gpu_memory']:
-                    self.logger.info(f"   GPU {gpu['device']}: {gpu['memory_allocated_gb']:.1f}GB / "
-                                   f"{gpu['memory_total_gb']:.1f}GB allocated")
-        
-        self.logger.info("="*80)
 
 
+# Example usage
 def main():
-    """Main benchmark function."""
-    parser = argparse.ArgumentParser(description="HuggingFace LayerSkip Llama3.2-1B Benchmark")
-    parser.add_argument("--model-name", type=str, 
-                       default="RichardErkhov/facebook_-_layerskip-llama3.2-1B-gguf",
-                       help="Model name")
-    parser.add_argument("--model-file", type=str, 
-                       default="layerskip-llama3.2-1B.Q2_K.gguf",
-                       help="Specific model file to use")
-    parser.add_argument("--output-file", type=str, 
-                       default="huggingface_layerskip_benchmark_results.json",
-                       help="Output file for results")
+    """Example of dynamic confidence-based early exit."""
+    import argparse
+    import logging
+    from transformers import AutoTokenizer, AutoModelForCausalLM
     
+    # Parse arguments
+    parser = argparse.ArgumentParser(description="Dynamic Confidence-Based Early Exit Benchmark")
+    parser.add_argument("--device", type=str, default="cuda",
+                       help="Device to run inference on (cuda/cpu)")
+    parser.add_argument("--num_runs", type=int, default=5,
+                       help="Number of runs per threshold")
     args = parser.parse_args()
     
-    # Create benchmark instance
-    benchmark = HuggingFaceLayerSkipBenchmark(
-        model_name=args.model_name,
-        model_file=args.model_file
+    logging.basicConfig(level=logging.INFO)
+    
+    # Load model
+    model_name = "facebook/layerskip-llama3.2-1B"
+    print(f"Loading model: {model_name}")
+    print(f"Device: {args.device}")
+    print(f"Number of runs: {args.num_runs}")
+    
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    # Ensure padding token exists for padding=True calls
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.eos_token is not None else tokenizer.bos_token
+        try:
+            tokenizer.padding_side = 'left'
+        except Exception:
+            pass
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        trust_remote_code=True,
+        torch_dtype=torch.float16 if args.device == "cuda" else torch.float32,
+        device_map="auto" if args.device == "cuda" else None
     )
     
-    # Run comprehensive benchmark
-    benchmark.run_comprehensive_benchmark(args.output_file)
+    if args.device == "cpu":
+        model = model.to("cpu")
     
-    print(f"\n✅ Benchmark completed! Results saved to {args.output_file}")
-    print("📊 View the results with:")
-    print(f"   Get-Content {args.output_file} | ConvertFrom-Json | ConvertTo-Json -Depth 10")
+    # Create benchmark
+    benchmark = DynamicEarlyExitBenchmark(
+        model, 
+        tokenizer, 
+        device=args.device,
+        confidence_metric="max_prob"  # or "entropy_conf" or "margin"
+    )
+    
+    # Test different confidence thresholds
+    prompt = "The future of artificial intelligence is"
+    confidence_thresholds = [0.5, 0.7, 0.8, 0.9, 0.95]
+    
+    results = benchmark.benchmark_confidence_thresholds(
+        prompt=prompt,
+        confidence_thresholds=confidence_thresholds,
+        max_new_tokens=100,
+        num_runs=args.num_runs
+    )
+    
+    print("\nDynamic early exit benchmark completed!")
+    
+    # Compare different confidence metrics
+    print("\nComparing confidence metrics...")
+    metric_comparison = benchmark.compare_confidence_metrics(
+        prompt=prompt,
+        threshold=0.8,
+        max_new_tokens=50,
+        num_runs=args.num_runs
+    )
 
 
 if __name__ == "__main__":

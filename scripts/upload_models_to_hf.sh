@@ -93,8 +93,6 @@ for name in "${!MODEL_DIRS[@]}"; do
   # Upload conversion info (try both possible names)
   if [[ -f "${MODEL_PATH}/conversion_info.json" ]]; then
     upload_file "${MODEL_PATH}/conversion_info.json" "$REPO_ID" "conversion_info.json"
-  elif [[ -f "${MODEL_PATH}/conversion_metadata.json" ]]; then
-    upload_file "${MODEL_PATH}/conversion_metadata.json" "$REPO_ID" "conversion_metadata.json"
   else
     echo "[WARN] No conversion info file found in ${MODEL_PATH}" >&2
   fi

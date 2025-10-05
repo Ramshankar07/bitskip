@@ -1,0 +1,709 @@
+{
+  "benchmark_info": {
+    "model_path": "models/models--Ram07--bitnet-2b/snapshots/9eff4ea605889c7b14c24aac966aeedac35a0e7a",
+    "device": "cpu",
+    "prompts": [
+      "The future of artificial intelligence is",
+      "In a world where technology advances rapidly,",
+      "The key to successful machine learning is",
+      "When developing large language models,",
+      "The most important aspect of neural networks is"
+    ],
+    "early_exit_thresholds": [
+      0.0,
+      0.25,
+      0.5,
+      0.75
+    ],
+    "max_new_tokens": 3,
+    "num_runs": 1,
+    "timestamp": "2025-10-04 00:34:44"
+  },
+  "prompt_results": {
+    "prompt_1": {
+      "prompt": "The future of artificial intelligence is",
+      "results": {
+        "threshold_0.0": {
+          "early_exit_threshold": 0.0,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 22.64294457435608,
+          "ttft_avg": 7.451294183731079,
+          "ttft_std": 0,
+          "tpot_avg": 7.547648191452026,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.1324916019711325,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.595089554786682,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.6060856743403618,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 22.64294457435608,
+              "ttft": 7.451294183731079,
+              "tpot": 7.547648191452026,
+              "tokens_per_second": 0.1324916019711325,
+              "itl_mean": 7.595089554786682,
+              "itl_std": 0.6060856743403618,
+              "token_times": [
+                7.451294183731079,
+                8.023656845092773,
+                7.166522264480591
+              ],
+              "generated_text": " Homes\u0e40\u0e1f-k"
+            }
+          ]
+        },
+        "threshold_0.25": {
+          "early_exit_threshold": 0.25,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.712507247924805,
+          "ttft_avg": 7.568910360336304,
+          "ttft_std": 0,
+          "tpot_avg": 7.237502415974935,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.13816921121749898,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.071408748626709,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.3421005745663175,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.712507247924805,
+              "ttft": 7.568910360336304,
+              "tpot": 7.237502415974935,
+              "tokens_per_second": 0.13816921121749898,
+              "itl_mean": 7.071408748626709,
+              "itl_std": 0.3421005745663175,
+              "token_times": [
+                7.568910360336304,
+                7.313310384750366,
+                6.829507112503052
+              ],
+              "generated_text": "iltr\u062e\u0631\u0649-\uff64"
+            }
+          ]
+        },
+        "threshold_0.5": {
+          "early_exit_threshold": 0.5,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 22.653346300125122,
+          "ttft_avg": 7.7848429679870605,
+          "ttft_std": 0,
+          "tpot_avg": 7.551115433375041,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.13243076586806207,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.434024333953857,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.8893224429898182,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 22.653346300125122,
+              "ttft": 7.7848429679870605,
+              "tpot": 7.551115433375041,
+              "tokens_per_second": 0.13243076586806207,
+              "itl_mean": 7.434024333953857,
+              "itl_std": 0.8893224429898182,
+              "token_times": [
+                7.7848429679870605,
+                8.062870264053345,
+                6.80517840385437
+              ],
+              "generated_text": "/proto attribute varieties"
+            }
+          ]
+        },
+        "threshold_0.75": {
+          "early_exit_threshold": 0.75,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.332475662231445,
+          "ttft_avg": 7.32875657081604,
+          "ttft_std": 0,
+          "tpot_avg": 7.110825220743815,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.14063065382099166,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.0015963315963745,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.5590953099985958,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.332475662231445,
+              "ttft": 7.32875657081604,
+              "tpot": 7.110825220743815,
+              "tokens_per_second": 0.14063065382099166,
+              "itl_mean": 7.0015963315963745,
+              "itl_std": 0.5590953099985958,
+              "token_times": [
+                7.32875657081604,
+                7.396936416625977,
+                6.6062562465667725
+              ],
+              "generated_text": " ASTM Folding architects"
+            }
+          ]
+        }
+      }
+    },
+    "prompt_2": {
+      "prompt": "In a world where technology advances rapidly,",
+      "results": {
+        "threshold_0.0": {
+          "early_exit_threshold": 0.0,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 22.11432957649231,
+          "ttft_avg": 6.749993085861206,
+          "ttft_std": 0,
+          "tpot_avg": 7.3714431921641035,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.13565864565883207,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.681778073310852,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.38146353943936995,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 22.11432957649231,
+              "ttft": 6.749993085861206,
+              "tpot": 7.3714431921641035,
+              "tokens_per_second": 0.13565864565883207,
+              "itl_mean": 7.681778073310852,
+              "itl_std": 0.38146353943936995,
+              "token_times": [
+                6.749993085861206,
+                7.412042617797852,
+                7.9515135288238525
+              ],
+              "generated_text": "MQ \u03bc\u03ad\u03c7\u03c1\u03b9 Pocket"
+            }
+          ]
+        },
+        "threshold_0.25": {
+          "early_exit_threshold": 0.25,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.631722927093506,
+          "ttft_avg": 6.820207834243774,
+          "ttft_std": 0,
+          "tpot_avg": 7.210574309031169,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.13868520829852768,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.405458092689514,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.6405483094307496,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.631722927093506,
+              "ttft": 6.820207834243774,
+              "tpot": 7.210574309031169,
+              "tokens_per_second": 0.13868520829852768,
+              "itl_mean": 7.405458092689514,
+              "itl_std": 0.6405483094307496,
+              "token_times": [
+                6.820207834243774,
+                6.952522039413452,
+                7.858394145965576
+              ],
+              "generated_text": " nale th\u00f9\u094d\u0930\u092e\u0923"
+            }
+          ]
+        },
+        "threshold_0.5": {
+          "early_exit_threshold": 0.5,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 22.41030526161194,
+          "ttft_avg": 7.514328241348267,
+          "ttft_std": 0,
+          "tpot_avg": 7.4701017538706465,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.13386698507578537,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.447788715362549,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.017465654022914487,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 22.41030526161194,
+              "ttft": 7.514328241348267,
+              "tpot": 7.4701017538706465,
+              "tokens_per_second": 0.13386698507578537,
+              "itl_mean": 7.447788715362549,
+              "itl_std": 0.017465654022914487,
+              "token_times": [
+                7.514328241348267,
+                7.435438632965088,
+                7.46013879776001
+              ],
+              "generated_text": " Animal Lay contains"
+            }
+          ]
+        },
+        "threshold_0.75": {
+          "early_exit_threshold": 0.75,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.698776960372925,
+          "ttft_avg": 6.75481915473938,
+          "ttft_std": 0,
+          "tpot_avg": 7.232925653457642,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.13825664024653123,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.4717384576797485,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.39838533052909986,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.698776960372925,
+              "ttft": 6.75481915473938,
+              "tpot": 7.232925653457642,
+              "tokens_per_second": 0.13825664024653123,
+              "itl_mean": 7.4717384576797485,
+              "itl_std": 0.39838533052909986,
+              "token_times": [
+                6.75481915473938,
+                7.190037488937378,
+                7.753439426422119
+              ],
+              "generated_text": "emap BG\u8b8a"
+            }
+          ]
+        }
+      }
+    },
+    "prompt_3": {
+      "prompt": "The key to successful machine learning is",
+      "results": {
+        "threshold_0.0": {
+          "early_exit_threshold": 0.0,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 23.7260160446167,
+          "ttft_avg": 7.741973638534546,
+          "ttft_std": 0,
+          "tpot_avg": 7.908672014872233,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.1264434785156728,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.989163160324097,
+          "itl_mean_std": 0,
+          "itl_std_avg": 1.0155475338329127,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 23.7260160446167,
+              "ttft": 7.741973638534546,
+              "tpot": 7.908672014872233,
+              "tokens_per_second": 0.1264434785156728,
+              "itl_mean": 7.989163160324097,
+              "itl_std": 1.0155475338329127,
+              "token_times": [
+                7.741973638534546,
+                7.271062612533569,
+                8.707263708114624
+              ],
+              "generated_text": "Trait B\u00fcy\u00fck Notice"
+            }
+          ]
+        },
+        "threshold_0.25": {
+          "early_exit_threshold": 0.25,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.167497396469116,
+          "ttft_avg": 7.330510854721069,
+          "ttft_std": 0,
+          "tpot_avg": 7.055832465489705,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.14172672110499093,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 6.915316939353943,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.20512483419245825,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.167497396469116,
+              "ttft": 7.330510854721069,
+              "tpot": 7.055832465489705,
+              "tokens_per_second": 0.14172672110499093,
+              "itl_mean": 6.915316939353943,
+              "itl_std": 0.20512483419245825,
+              "token_times": [
+                7.330510854721069,
+                6.7702717781066895,
+                7.060362100601196
+              ],
+              "generated_text": " Border.topic deform"
+            }
+          ]
+        },
+        "threshold_0.5": {
+          "early_exit_threshold": 0.5,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 22.065722942352295,
+          "ttft_avg": 7.347499132156372,
+          "ttft_std": 0,
+          "tpot_avg": 7.355240980784099,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.13595747611975537,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.354908585548401,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.472454202102145,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 22.065722942352295,
+              "ttft": 7.347499132156372,
+              "tpot": 7.355240980784099,
+              "tokens_per_second": 0.13595747611975537,
+              "itl_mean": 7.354908585548401,
+              "itl_std": 0.472454202102145,
+              "token_times": [
+                7.347499132156372,
+                7.0208330154418945,
+                7.688984155654907
+              ],
+              "generated_text": "setIcon calorie didSelectRowAtIndexPath"
+            }
+          ]
+        },
+        "threshold_0.75": {
+          "early_exit_threshold": 0.75,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.198884963989258,
+          "ttft_avg": 7.500430345535278,
+          "ttft_std": 0,
+          "tpot_avg": 7.066294987996419,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.14151687718934877,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 6.848743677139282,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.06774515842247063,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.198884963989258,
+              "ttft": 7.500430345535278,
+              "tpot": 7.066294987996419,
+              "tokens_per_second": 0.14151687718934877,
+              "itl_mean": 6.848743677139282,
+              "itl_std": 0.06774515842247063,
+              "token_times": [
+                7.500430345535278,
+                6.800840616226196,
+                6.896646738052368
+              ],
+              "generated_text": "/alert.Itemsobservation"
+            }
+          ]
+        }
+      }
+    },
+    "prompt_4": {
+      "prompt": "When developing large language models,",
+      "results": {
+        "threshold_0.0": {
+          "early_exit_threshold": 0.0,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.375401496887207,
+          "ttft_avg": 7.223356008529663,
+          "ttft_std": 0,
+          "tpot_avg": 7.125133832295735,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.14034824096459078,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.07577383518219,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.6999365907304802,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.375401496887207,
+              "ttft": 7.223356008529663,
+              "tpot": 7.125133832295735,
+              "tokens_per_second": 0.14034824096459078,
+              "itl_mean": 7.07577383518219,
+              "itl_std": 0.6999365907304802,
+              "token_times": [
+                7.223356008529663,
+                7.570703744888306,
+                6.580843925476074
+              ],
+              "generated_text": "remium lavUpperCase"
+            }
+          ]
+        },
+        "threshold_0.25": {
+          "early_exit_threshold": 0.25,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.550183296203613,
+          "ttft_avg": 7.734436750411987,
+          "ttft_std": 0,
+          "tpot_avg": 7.183394432067871,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.13920995282339407,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 6.907638311386108,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.5006860156960763,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.550183296203613,
+              "ttft": 7.734436750411987,
+              "tpot": 7.183394432067871,
+              "tokens_per_second": 0.13920995282339407,
+              "itl_mean": 6.907638311386108,
+              "itl_std": 0.5006860156960763,
+              "token_times": [
+                7.734436750411987,
+                7.261676788330078,
+                6.553599834442139
+              ],
+              "generated_text": " RP(Module BLOCK"
+            }
+          ]
+        },
+        "threshold_0.5": {
+          "early_exit_threshold": 0.5,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 24.378141164779663,
+          "ttft_avg": 7.71467399597168,
+          "ttft_std": 0,
+          "tpot_avg": 8.126047054926554,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.12306106440692255,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 8.331266045570374,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.060634985078682806,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 24.378141164779663,
+              "ttft": 7.71467399597168,
+              "tpot": 8.126047054926554,
+              "tokens_per_second": 0.12306106440692255,
+              "itl_mean": 8.331266045570374,
+              "itl_std": 0.060634985078682806,
+              "token_times": [
+                7.71467399597168,
+                8.288390636444092,
+                8.374141454696655
+              ],
+              "generated_text": "(showNFL\\xc"
+            }
+          ]
+        },
+        "threshold_0.75": {
+          "early_exit_threshold": 0.75,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.709116220474243,
+          "ttft_avg": 7.680253028869629,
+          "ttft_std": 0,
+          "tpot_avg": 7.236372073491414,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.13819079365242184,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.014208197593689,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.687563287532046,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.709116220474243,
+              "ttft": 7.680253028869629,
+              "tpot": 7.236372073491414,
+              "tokens_per_second": 0.13819079365242184,
+              "itl_mean": 7.014208197593689,
+              "itl_std": 0.687563287532046,
+              "token_times": [
+                7.680253028869629,
+                7.500388860702515,
+                6.528027534484863
+              ],
+              "generated_text": " GE streamed FP"
+            }
+          ]
+        }
+      }
+    },
+    "prompt_5": {
+      "prompt": "The most important aspect of neural networks is",
+      "results": {
+        "threshold_0.0": {
+          "early_exit_threshold": 0.0,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.33116102218628,
+          "ttft_avg": 6.664303541183472,
+          "ttft_std": 0,
+          "tpot_avg": 7.110387007395427,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.14063932089208536,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.333142042160034,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.4475927876899329,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.33116102218628,
+              "ttft": 6.664303541183472,
+              "tpot": 7.110387007395427,
+              "tokens_per_second": 0.14063932089208536,
+              "itl_mean": 7.333142042160034,
+              "itl_std": 0.4475927876899329,
+              "token_times": [
+                6.664303541183472,
+                7.016646146774292,
+                7.649637937545776
+              ],
+              "generated_text": " Tried Claudia_PARAMETERS"
+            }
+          ]
+        },
+        "threshold_0.25": {
+          "early_exit_threshold": 0.25,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 24.371042013168335,
+          "ttft_avg": 6.699104070663452,
+          "ttft_std": 0,
+          "tpot_avg": 8.123680671056112,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.12309691142377165,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 8.835574269294739,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.6887012524418401,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 24.371042013168335,
+              "ttft": 6.699104070663452,
+              "tpot": 8.123680671056112,
+              "tokens_per_second": 0.12309691142377165,
+              "itl_mean": 8.835574269294739,
+              "itl_std": 0.6887012524418401,
+              "token_times": [
+                6.699104070663452,
+                9.322559595108032,
+                8.348588943481445
+              ],
+              "generated_text": "alsy_MP.permissions"
+            }
+          ]
+        },
+        "threshold_0.5": {
+          "early_exit_threshold": 0.5,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.798295974731445,
+          "ttft_avg": 6.883002281188965,
+          "ttft_std": 0,
+          "tpot_avg": 7.266098658243815,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.13762543656979406,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.457387566566467,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.6776820431923639,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.798295974731445,
+              "ttft": 6.883002281188965,
+              "tpot": 7.266098658243815,
+              "tokens_per_second": 0.13762543656979406,
+              "itl_mean": 7.457387566566467,
+              "itl_std": 0.6776820431923639,
+              "token_times": [
+                6.883002281188965,
+                6.978193998336792,
+                7.936581134796143
+              ],
+              "generated_text": " absol\u0e48\u0e2d Greenwood"
+            }
+          ]
+        },
+        "threshold_0.75": {
+          "early_exit_threshold": 0.75,
+          "num_runs": 1,
+          "num_generated_tokens_avg": 3,
+          "total_time_avg": 21.139191389083862,
+          "ttft_avg": 6.752197742462158,
+          "ttft_std": 0,
+          "tpot_avg": 7.046397129694621,
+          "tpot_std": 0,
+          "tokens_per_second_avg": 0.1419164974091289,
+          "tokens_per_second_std": 0,
+          "itl_mean_avg": 7.193296670913696,
+          "itl_mean_std": 0,
+          "itl_std_avg": 0.23135720129303275,
+          "individual_runs": [
+            {
+              "run": 1,
+              "num_generated_tokens": 3,
+              "total_time": 21.139191389083862,
+              "ttft": 6.752197742462158,
+              "tpot": 7.046397129694621,
+              "tokens_per_second": 0.1419164974091289,
+              "itl_mean": 7.193296670913696,
+              "itl_std": 0.23135720129303275,
+              "token_times": [
+                6.752197742462158,
+                7.029702425003052,
+                7.356890916824341
+              ],
+              "generated_text": ".proxy.Resize twists"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
