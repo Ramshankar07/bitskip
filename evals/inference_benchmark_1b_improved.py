@@ -5,6 +5,7 @@ Measures TPOT, TTFT, tokens/sec, ITL, memory usage with proper timing and early 
 """
 
 import os
+import sys
 import time
 import json
 import argparse
@@ -12,6 +13,11 @@ import logging
 import statistics
 from typing import Dict, List, Tuple, Optional
 from pathlib import Path
+
+# Add current directory to Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
 
 import torch
 import torch.nn.functional as F
@@ -43,15 +49,15 @@ class EarlyExitGenerator:
     Early exit generation wrapper that implements layer-wise early exit during inference.
     """
     
-    def __init__(self, model, tokenizer, confidence_threshold: float = 0.95):
+    def __init__(self, model, tokenizer, exit_layer: int = None):
         self.model = model
         self.tokenizer = tokenizer
-        self.confidence_threshold = confidence_threshold
+        self.exit_layer = exit_layer  # Fixed layer to exit at
         self.exit_layer_history = []
     
     def should_exit_early(self, hidden_states: torch.Tensor, layer_idx: int) -> Tuple[bool, float, torch.Tensor]:
         """
-        Determine if we should exit early at this layer based on prediction confidence.
+        Determine if we should exit early at this layer based on fixed layer number.
         
         Args:
             hidden_states: Current hidden states [batch_size, seq_len, hidden_size]
@@ -60,27 +66,28 @@ class EarlyExitGenerator:
         Returns:
             Tuple of (should_exit, confidence, logits)
         """
-        # Never exit before layer 4 (need minimum computation)
-        if layer_idx < 4:
+        # If no exit layer specified, use full model
+        if self.exit_layer is None:
             return False, 0.0, None
         
-        # Get logits from current hidden state
-        with torch.no_grad():
-            # Apply layer norm (if model has it)
-            if hasattr(self.model, 'layer_norm'):
-                hidden_states = self.model.layer_norm(hidden_states)
-            
-            # Get logits
-            logits = self.model.lm_head(hidden_states[:, -1, :])
-            
-            # Calculate confidence (max probability)
-            probs = F.softmax(logits, dim=-1)
-            confidence = probs.max().item()
-            
-            # Decide whether to exit
-            should_exit = confidence >= self.confidence_threshold
-            
-            return should_exit, confidence, logits
+        # Exit at the specified layer
+        if layer_idx >= self.exit_layer:
+            # Get logits from current hidden state
+            with torch.no_grad():
+                # Apply layer norm (if model has it)
+                if hasattr(self.model, 'layer_norm'):
+                    hidden_states = self.model.layer_norm(hidden_states)
+                
+                # Get logits
+                logits = self.model.lm_head(hidden_states[:, -1, :])
+                
+                # Calculate confidence (max probability)
+                probs = F.softmax(logits, dim=-1)
+                confidence = probs.max().item()
+                
+                return True, confidence, logits
+        
+        return False, 0.0, None
     
     def generate_with_early_exit(
         self,
@@ -399,7 +406,7 @@ class InferenceBenchmark:
         self, 
         prompt: str, 
         max_new_tokens: int = 100,
-        early_exit_threshold: float = 0.0,
+        exit_layer: int = None,
         temperature: float = 0.7,
         top_p: float = 0.9,
         num_runs: int = 5,
@@ -415,7 +422,7 @@ class InferenceBenchmark:
         - ITL (Inter-Token Latency): Average time between subsequent tokens
         - Decode Latency: Average time per token during generation (excluding prefill)
         """
-        self.logger.info(f"Benchmarking with early_exit_threshold={early_exit_threshold}")
+        self.logger.info(f"Benchmarking with exit_layer={exit_layer}")
         
         # Tokenize input
         tok_out = self.tokenizer(prompt, return_tensors="pt")
@@ -446,8 +453,8 @@ class InferenceBenchmark:
         
         # Create early exit generator if needed
         early_exit_gen = None
-        if use_early_exit and early_exit_threshold > 0.0:
-            early_exit_gen = EarlyExitGenerator(self.model, self.tokenizer, early_exit_threshold)
+        if use_early_exit and exit_layer is not None:
+            early_exit_gen = EarlyExitGenerator(self.model, self.tokenizer, exit_layer)
         
         all_metrics = []
         
@@ -679,7 +686,7 @@ class InferenceBenchmark:
             return {}
         
         avg_metrics = {
-            'early_exit_threshold': early_exit_threshold,
+            'exit_layer': exit_layer,
             'num_runs': num_runs,
             'num_generated_tokens_avg': statistics.mean([m['num_generated_tokens'] for m in all_metrics]),
             'total_time_avg': statistics.mean([m['total_time'] for m in all_metrics]),
@@ -708,38 +715,39 @@ class InferenceBenchmark:
         
         return avg_metrics
     
-    def benchmark_early_exit_thresholds(
+    def benchmark_early_exit_layers(
         self, 
         prompt: str,
-        early_exit_thresholds: List[float] = [0.0, 0.5, 0.75, 0.9, 0.95],
+        exit_layers: List[int] = [None, 4, 8, 12, 16],
         max_new_tokens: int = 100,
         num_runs: int = 5
     ) -> Dict:
-        """Benchmark model with different early exit thresholds."""
-        self.logger.info("Starting comprehensive early exit benchmark")
-        self.logger.info(f"Testing thresholds: {early_exit_thresholds}")
+        """Benchmark model with different early exit layers."""
+        self.logger.info("Starting comprehensive early exit layer benchmark")
+        self.logger.info(f"Testing layers: {exit_layers}")
         
         all_results = {}
         
-        for threshold in early_exit_thresholds:
+        for layer in exit_layers:
+            layer_name = "full_model" if layer is None else f"layer_{layer}"
             self.logger.info(f"\n{'='*60}")
-            self.logger.info(f"Testing Early Exit Threshold: {threshold}")
+            self.logger.info(f"Testing Exit Layer: {layer_name}")
             self.logger.info(f"{'='*60}")
             
-            use_early_exit = threshold > 0.0
+            use_early_exit = layer is not None
             
             results = self.generate_with_timing(
                 prompt=prompt,
                 max_new_tokens=max_new_tokens,
-                early_exit_threshold=threshold,
+                exit_layer=layer,
                 num_runs=num_runs,
                 use_early_exit=use_early_exit
             )
             
             if results:
-                all_results[f'threshold_{threshold}'] = results
+                all_results[f'layer_{layer_name}'] = results
                 
-                self.logger.info(f"\nResults for threshold {threshold}:")
+                self.logger.info(f"\nResults for {layer_name}:")
                 self.logger.info(f"  Tokens/sec: {results['tokens_per_second_avg']:.2f} ± {results['tokens_per_second_std']:.2f}")
                 self.logger.info(f"  TTFT: {results['ttft_avg']:.4f}s ± {results['ttft_std']:.4f}s")
                 self.logger.info(f"  TPOT: {results['tpot_avg']:.4f}s ± {results['tpot_std']:.4f}s")
@@ -755,14 +763,14 @@ class InferenceBenchmark:
     def run_comprehensive_benchmark(
         self,
         prompts: List[str],
-        early_exit_thresholds: List[float] = [0.0, 0.5, 0.75, 0.9, 0.95],
+        exit_layers: List[int] = [None, 4, 8, 12, 16],
         max_new_tokens: int = 100,
         num_runs: int = 3
     ) -> Dict:
-        """Run comprehensive benchmark across multiple prompts and thresholds."""
+        """Run comprehensive benchmark across multiple prompts and exit layers."""
         self.logger.info("Starting comprehensive inference benchmark")
         self.logger.info(f"Prompts: {len(prompts)}")
-        self.logger.info(f"Early exit thresholds: {early_exit_thresholds}")
+        self.logger.info(f"Exit layers: {exit_layers}")
         self.logger.info(f"Max new tokens: {max_new_tokens}")
         self.logger.info(f"Runs per combination: {num_runs}")
         
@@ -773,7 +781,7 @@ class InferenceBenchmark:
                 'model_dtype': str(self._model_dtype()),
                 'model_device': str(self._model_device()),
                 'prompts': prompts,
-                'early_exit_thresholds': early_exit_thresholds,
+                'exit_layers': exit_layers,
                 'max_new_tokens': max_new_tokens,
                 'num_runs': num_runs,
                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
@@ -787,9 +795,9 @@ class InferenceBenchmark:
             self.logger.info(f"Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
             self.logger.info(f"{'='*80}")
             
-            prompt_results = self.benchmark_early_exit_thresholds(
+            prompt_results = self.benchmark_early_exit_layers(
                 prompt=prompt,
-                early_exit_thresholds=early_exit_thresholds,
+                exit_layers=exit_layers,
                 max_new_tokens=max_new_tokens,
                 num_runs=num_runs
             )
@@ -810,7 +818,7 @@ class InferenceBenchmark:
     def print_summary(self, results: Dict):
         """Print a summary of benchmark results."""
         print("\n" + "="*80)
-        print("INFERENCE BENCHMARK SUMMARY WITH EARLY EXIT")
+        print("INFERENCE BENCHMARK SUMMARY WITH EARLY EXIT BY LAYERS")
         print("="*80)
         print(f"Model dtype: {results['benchmark_info']['model_dtype']}")
         print(f"Model device: {results['benchmark_info']['model_device']}")
@@ -821,20 +829,21 @@ class InferenceBenchmark:
             print(f"Prompt: {prompt_data['prompt'][:100]}{'...' if len(prompt_data['prompt']) > 100 else ''}")
             print("-" * 80)
             
-            for threshold_key, threshold_data in prompt_data['results'].items():
-                threshold = threshold_data['early_exit_threshold']
-                print(f"\nEarly Exit Threshold: {threshold}")
-                print(f"  Tokens/sec:       {threshold_data['tokens_per_second_avg']:.2f} ± {threshold_data['tokens_per_second_std']:.2f}")
-                print(f"  TTFT:             {threshold_data['ttft_avg']:.4f}s ± {threshold_data['ttft_std']:.4f}s")
-                print(f"  Prefill Time:     {threshold_data['estimated_prefill_time_avg']:.4f}s")
-                print(f"  Decode Latency:   {threshold_data['decode_latency_avg']:.4f}s ± {threshold_data['decode_latency_std']:.4f}s")
-                print(f"  TPOT:             {threshold_data['tpot_avg']:.4f}s ± {threshold_data['tpot_std']:.4f}s")
-                print(f"  ITL:              {threshold_data['itl_mean_avg']:.4f}s ± {threshold_data['itl_mean_std']:.4f}s")
-                print(f"  ITL Range:        [{threshold_data['itl_min_avg']:.4f}s, {threshold_data['itl_max_avg']:.4f}s]")
-                print(f"  Avg Exit Layer:   {threshold_data['avg_exit_layer_avg']:.1f}")
-                print(f"  Avg Confidence:   {threshold_data['avg_confidence_avg']:.3f}")
-                print(f"  Peak Memory:      {threshold_data['peak_memory_mb_avg']:.2f} MB")
-                print(f"  Tokens Generated: {threshold_data['num_generated_tokens_avg']:.1f}")
+            for layer_key, layer_data in prompt_data['results'].items():
+                exit_layer = layer_data['exit_layer']
+                layer_name = "Full Model" if exit_layer is None else f"Layer {exit_layer}"
+                print(f"\nExit Layer: {layer_name}")
+                print(f"  Tokens/sec:       {layer_data['tokens_per_second_avg']:.2f} ± {layer_data['tokens_per_second_std']:.2f}")
+                print(f"  TTFT:             {layer_data['ttft_avg']:.4f}s ± {layer_data['ttft_std']:.4f}s")
+                print(f"  Prefill Time:     {layer_data['estimated_prefill_time_avg']:.4f}s")
+                print(f"  Decode Latency:   {layer_data['decode_latency_avg']:.4f}s ± {layer_data['decode_latency_std']:.4f}s")
+                print(f"  TPOT:             {layer_data['tpot_avg']:.4f}s ± {layer_data['tpot_std']:.4f}s")
+                print(f"  ITL:              {layer_data['itl_mean_avg']:.4f}s ± {layer_data['itl_mean_std']:.4f}s")
+                print(f"  ITL Range:        [{layer_data['itl_min_avg']:.4f}s, {layer_data['itl_max_avg']:.4f}s]")
+                print(f"  Avg Exit Layer:   {layer_data['avg_exit_layer_avg']:.1f}")
+                print(f"  Avg Confidence:   {layer_data['avg_confidence_avg']:.3f}")
+                print(f"  Peak Memory:      {layer_data['peak_memory_mb_avg']:.2f} MB")
+                print(f"  Tokens Generated: {layer_data['num_generated_tokens_avg']:.1f}")
 
 
 def parse_args():
@@ -853,9 +862,9 @@ def parse_args():
                        help='Number of runs per prompt/threshold combination')
     parser.add_argument('--output_file', type=str, default='inference_benchmark_results.json',
                        help='Output file for results')
-    parser.add_argument('--early_exit_thresholds', type=float, nargs='+',
-                       default=[0.00001],
-                       help='List of early exit confidence thresholds to test')
+    parser.add_argument('--exit_layers', type=int, nargs='+',
+                       default=[None, 4, 8, 12, 16],
+                       help='List of exit layers to test (None for full model)')
     
     return parser.parse_args()
 
@@ -890,7 +899,7 @@ def main():
     # Run comprehensive benchmark
     results = benchmark.run_comprehensive_benchmark(
         prompts=test_prompts,
-        early_exit_thresholds=args.early_exit_thresholds,
+        exit_layers=args.exit_layers,
         max_new_tokens=args.max_new_tokens,
         num_runs=args.num_runs
     )

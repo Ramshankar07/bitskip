@@ -10,6 +10,8 @@ Confidence metrics:
 3. Margin-based confidence (difference between top-2 predictions)
 """
 
+import os
+import sys
 import torch
 import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple
@@ -17,6 +19,11 @@ import time
 import statistics
 import logging
 import numpy as np
+
+# Add current directory to Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
 
 
 class ConfidenceMetrics:
@@ -161,41 +168,30 @@ class DynamicEarlyExitBenchmark:
         else:
             raise ValueError(f"Unknown confidence metric: {metric}")
     
-    def generate_with_dynamic_exit(
+    def generate_with_layer_exit(
         self,
         prompt: str,
-        confidence_threshold: float,
+        exit_layer: Optional[int] = None,
         max_new_tokens: int = 100,
         temperature: float = 0.7,
         top_p: float = 0.9,
-        min_exit_layer: int = 0,
-        max_exit_layer: Optional[int] = None
     ) -> Dict:
         """
-        Generate tokens with dynamic confidence-based early exit.
+        Generate tokens with fixed layer-based early exit.
         
         Args:
             prompt: Input prompt
-            confidence_threshold: Confidence threshold for early exit (0-1)
+            exit_layer: Fixed layer to exit at (None = use full model)
             max_new_tokens: Maximum tokens to generate
             temperature: Sampling temperature
             top_p: Top-p sampling
-            min_exit_layer: Minimum layer to consider for exit
-            max_exit_layer: Maximum layer to consider (None = last layer)
             
         Returns:
             Generation results with exit statistics
         """
-        if max_exit_layer is None:
-            max_exit_layer = self.num_layers - 1
-        
         # Validate parameters
-        if not 0 <= confidence_threshold <= 1:
-            raise ValueError("confidence_threshold must be in [0, 1]")
-        if min_exit_layer < 0 or min_exit_layer >= self.num_layers:
-            raise ValueError(f"min_exit_layer must be in [0, {self.num_layers-1}]")
-        if max_exit_layer < min_exit_layer or max_exit_layer >= self.num_layers:
-            raise ValueError(f"max_exit_layer must be in [{min_exit_layer}, {self.num_layers-1}]")
+        if exit_layer is not None and (exit_layer < 0 or exit_layer >= self.num_layers):
+            raise ValueError(f"exit_layer must be in [0, {self.num_layers-1}] or None")
         
         # Tokenize input
         inputs = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)
@@ -227,38 +223,24 @@ class DynamicEarlyExitBenchmark:
                     return_dict=True
                 )
                 
-                # Check each layer for confidence threshold
-                exited = False
-                exit_layer = max_exit_layer  # Default to last layer
-                exit_confidence = 0.0
-                
-                for layer_idx in range(min_exit_layer, max_exit_layer + 1):
-                    # Get hidden states at this layer
-                    # Note: hidden_states[0] is embedding, hidden_states[i+1] is layer i output
-                    hidden_state = outputs.hidden_states[layer_idx + 1]
-                    
-                    # Project to vocabulary
-                    logits = self._project_to_vocab(hidden_state)
-                    
-                    # Get logits for last position
-                    next_token_logits = logits[:, -1, :]
-                    
-                    # Calculate confidence
-                    confidence = self._calculate_confidence(next_token_logits)
-                    
-                    # Check if we can exit early
-                    if confidence >= confidence_threshold:
-                        exit_layer = layer_idx
-                        exit_confidence = confidence
-                        exited = True
-                        break
-                
-                # If we didn't exit early, use last layer
-                if not exited:
+                # Use fixed exit layer or full model
+                if exit_layer is not None and exit_layer < len(outputs.hidden_states) - 1:
+                    # Exit at specified layer
+                    hidden_state = outputs.hidden_states[exit_layer + 1]  # +1 because hidden_states[0] is embedding
+                    actual_exit_layer = exit_layer
+                else:
+                    # Use full model (last layer)
                     hidden_state = outputs.hidden_states[-1]
-                    logits = self._project_to_vocab(hidden_state)
-                    next_token_logits = logits[:, -1, :]
-                    exit_confidence = self._calculate_confidence(next_token_logits)
+                    actual_exit_layer = self.num_layers - 1
+                
+                # Project to vocabulary
+                logits = self._project_to_vocab(hidden_state)
+                
+                # Get logits for last position
+                next_token_logits = logits[:, -1, :]
+                
+                # Calculate confidence for tracking
+                confidence = self._calculate_confidence(next_token_logits)
                 
                 # Apply temperature
                 next_token_logits = next_token_logits / temperature
@@ -284,8 +266,8 @@ class DynamicEarlyExitBenchmark:
                 
                 # Record metrics
                 token_times.append(step_end - step_start)
-                exit_layers.append(exit_layer)
-                exit_confidences.append(exit_confidence)
+                exit_layers.append(actual_exit_layer)
+                exit_confidences.append(confidence)
                 
                 # Check for EOS
                 if next_token.item() == self.tokenizer.eos_token_id:
@@ -321,7 +303,7 @@ class DynamicEarlyExitBenchmark:
         }
         
         return {
-            'confidence_threshold': confidence_threshold,
+            'exit_layer': exit_layer,
             'confidence_metric': self.confidence_metric,
             'num_tokens': num_tokens,
             'generated_text': self.tokenizer.decode(generated_tokens, skip_special_tokens=True),
@@ -341,44 +323,45 @@ class DynamicEarlyExitBenchmark:
             'itl_mean_ms': statistics.mean(token_times[1:]) * 1000 if len(token_times) > 1 else 0
         }
     
-    def benchmark_confidence_thresholds(
+    def benchmark_exit_layers(
         self,
         prompt: str,
-        confidence_thresholds: List[float],
+        exit_layers: List[Optional[int]],
         max_new_tokens: int = 100,
         num_runs: int = 5
     ) -> Dict:
         """
-        Benchmark different confidence thresholds.
+        Benchmark different exit layers.
         
         Args:
             prompt: Input prompt
-            confidence_thresholds: List of thresholds to test (e.g., [0.5, 0.7, 0.9, 0.95])
+            exit_layers: List of layers to test (None = full model)
             max_new_tokens: Maximum tokens per generation
-            num_runs: Number of runs per threshold
+            num_runs: Number of runs per layer
             
         Returns:
-            Results for all thresholds
+            Results for all layers
         """
         self.logger.info(
-            f"Benchmarking {len(confidence_thresholds)} confidence thresholds "
+            f"Benchmarking {len(exit_layers)} exit layers "
             f"with {num_runs} runs each"
         )
         
         all_results = {}
         
-        for threshold in confidence_thresholds:
+        for layer in exit_layers:
+            layer_name = "full_model" if layer is None else f"layer_{layer}"
             self.logger.info(f"\n{'='*60}")
-            self.logger.info(f"Testing Confidence Threshold: {threshold:.2f}")
+            self.logger.info(f"Testing Exit Layer: {layer_name}")
             self.logger.info(f"{'='*60}")
             
             run_results = []
             
             for run in range(num_runs):
                 try:
-                    result = self.generate_with_dynamic_exit(
+                    result = self.generate_with_layer_exit(
                         prompt=prompt,
-                        confidence_threshold=threshold,
+                        exit_layer=layer,
                         max_new_tokens=max_new_tokens
                     )
                     
@@ -395,8 +378,8 @@ class DynamicEarlyExitBenchmark:
             
             if run_results:
                 # Calculate averages
-                all_results[f'threshold_{threshold:.2f}'] = {
-                    'threshold': threshold,
+                all_results[f'layer_{layer_name}'] = {
+                    'exit_layer': layer,
                     'num_runs': len(run_results),
                     'avg_tokens_per_second': statistics.mean([r['tokens_per_second'] for r in run_results]),
                     'std_tokens_per_second': statistics.stdev([r['tokens_per_second'] for r in run_results]) if len(run_results) > 1 else 0,
@@ -411,10 +394,10 @@ class DynamicEarlyExitBenchmark:
                 }
                 
                 self.logger.info(
-                    f"\nThreshold {threshold:.2f} Summary:\n"
-                    f"  Throughput: {all_results[f'threshold_{threshold:.2f}']['avg_tokens_per_second']:.2f} tok/s\n"
-                    f"  Avg Exit Layer: {all_results[f'threshold_{threshold:.2f}']['avg_exit_layer']:.1f}\n"
-                    f"  Exit Distribution: {all_results[f'threshold_{threshold:.2f}']['exit_distribution']}"
+                    f"\nLayer {layer_name} Summary:\n"
+                    f"  Throughput: {all_results[f'layer_{layer_name}']['avg_tokens_per_second']:.2f} tok/s\n"
+                    f"  Avg Exit Layer: {all_results[f'layer_{layer_name}']['avg_exit_layer']:.1f}\n"
+                    f"  Exit Distribution: {all_results[f'layer_{layer_name}']['exit_distribution']}"
                 )
         
         return all_results
@@ -481,76 +464,101 @@ class DynamicEarlyExitBenchmark:
         return results
 
 
-# Example usage
 def main():
-    """Example of dynamic confidence-based early exit."""
+    """Run a comprehensive LayerSkip benchmark similar to inference_benchmark_1b_improved.py."""
     import argparse
     import logging
+    import json
     from transformers import AutoTokenizer, AutoModelForCausalLM
-    
-    # Parse arguments
-    parser = argparse.ArgumentParser(description="Dynamic Confidence-Based Early Exit Benchmark")
+
+    parser = argparse.ArgumentParser(description="Comprehensive LayerSkip Benchmark with Dynamic Early Exit")
+    parser.add_argument("--model_name", type=str, default="facebook/layerskip-llama3.2-1B",
+                        help="Hugging Face repo id of the LayerSkip model")
     parser.add_argument("--device", type=str, default="cuda",
-                       help="Device to run inference on (cuda/cpu)")
-    parser.add_argument("--num_runs", type=int, default=5,
-                       help="Number of runs per threshold")
+                        help="Device to run inference on (cuda/cpu)")
+    parser.add_argument("--num_runs", type=int, default=3,
+                        help="Number of runs per threshold")
+    parser.add_argument("--max_new_tokens", type=int, default=100,
+                        help="Maximum new tokens to generate")
+    parser.add_argument("--exit_layers", type=int, nargs='+', default=[None, 4, 8, 12, 16],
+                        help="Exit layers to benchmark (None for full model)")
+    parser.add_argument("--confidence_metric", type=str, default="max_prob", choices=["max_prob", "entropy_conf", "margin"],
+                        help="Confidence metric to use")
+    parser.add_argument("--output_file", type=str, default="huggingface_layerskip_benchmark_results.json",
+                        help="Path to write JSON results")
+    parser.add_argument("--prompt", type=str, default="The future of artificial intelligence is",
+                        help="Prompt to use for benchmarking")
     args = parser.parse_args()
     
     logging.basicConfig(level=logging.INFO)
-    
-    # Load model
-    model_name = "facebook/layerskip-llama3.2-1B"
-    print(f"Loading model: {model_name}")
+
+    print(f"Loading model: {args.model_name}")
     print(f"Device: {args.device}")
-    print(f"Number of runs: {args.num_runs}")
-    
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    # Ensure padding token exists for padding=True calls
+    print(f"Runs per threshold: {args.num_runs}")
+
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token if tokenizer.eos_token is not None else tokenizer.bos_token
         try:
             tokenizer.padding_side = 'left'
         except Exception:
             pass
+
     model = AutoModelForCausalLM.from_pretrained(
-        model_name,
+        args.model_name,
         trust_remote_code=True,
         torch_dtype=torch.float16 if args.device == "cuda" else torch.float32,
         device_map="auto" if args.device == "cuda" else None
     )
-    
     if args.device == "cpu":
         model = model.to("cpu")
-    
-    # Create benchmark
-    benchmark = DynamicEarlyExitBenchmark(
-        model, 
-        tokenizer, 
+
+    # Create dynamic early-exit benchmarker
+    bench = DynamicEarlyExitBenchmark(
+        model=model,
+        tokenizer=tokenizer,
         device=args.device,
-        confidence_metric="max_prob"  # or "entropy_conf" or "margin"
+        confidence_metric=args.confidence_metric
     )
-    
-    # Test different confidence thresholds
-    prompt = "The future of artificial intelligence is"
-    confidence_thresholds = [0.5, 0.7, 0.8, 0.9, 0.95]
-    
-    results = benchmark.benchmark_confidence_thresholds(
-        prompt=prompt,
-        confidence_thresholds=confidence_thresholds,
-        max_new_tokens=100,
+
+    # Run layer benchmarks
+    results = bench.benchmark_exit_layers(
+        prompt=args.prompt,
+        exit_layers=args.exit_layers,
+        max_new_tokens=args.max_new_tokens,
         num_runs=args.num_runs
     )
-    
-    print("\nDynamic early exit benchmark completed!")
-    
-    # Compare different confidence metrics
-    print("\nComparing confidence metrics...")
-    metric_comparison = benchmark.compare_confidence_metrics(
-        prompt=prompt,
-        threshold=0.8,
-        max_new_tokens=50,
-        num_runs=args.num_runs
-    )
+
+    # Persist results in a structure similar to the improved benchmark
+    wrapped = {
+        'benchmark_info': {
+            'model_path': args.model_name,
+            'device': args.device,
+            'confidence_metric': args.confidence_metric,
+            'exit_layers': args.exit_layers,
+            'max_new_tokens': args.max_new_tokens,
+            'num_runs': args.num_runs,
+            'prompt': args.prompt,
+        },
+        'layer_results': results,
+    }
+
+    with open(args.output_file, 'w') as f:
+        json.dump(wrapped, f, indent=2)
+    print(f"\nResults saved to {args.output_file}")
+
+    # Print concise summary matching key metrics
+    print("\n" + "="*80)
+    print("LAYER_SKIP BENCHMARK SUMMARY")
+    print("="*80)
+    for key, data in results.items():
+        layer_name = "Full Model" if data['exit_layer'] is None else f"Layer {data['exit_layer']}"
+        print(f"\n{key}: {layer_name}")
+        print(f"  Tok/s: {data['avg_tokens_per_second']:.2f} ± {data['std_tokens_per_second']:.2f}")
+        print(f"  TTFT (ms): {data['avg_ttft_ms']:.2f}")
+        print(f"  TPOT (ms): {data['avg_tpot_ms']:.2f}")
+        print(f"  Avg exit layer: {data['avg_exit_layer']:.1f}")
+        print(f"  Avg confidence: {data['avg_confidence']:.3f}")
 
 
 if __name__ == "__main__":
