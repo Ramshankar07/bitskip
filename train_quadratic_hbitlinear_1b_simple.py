@@ -46,7 +46,7 @@ class SimpleHBitLinear1B(nn.Module):
         """Convert config dict to DefaultConfig for H-BitLinear 1B."""
         return DefaultConfig(
             vocab_size=config_dict.get('vocab_size', 128256),
-            hidden_size=config_dict.get('hidden_size', 1536),
+            hidden_size=config_dict.get('hidden_size', 1024),
             num_hidden_layers=config_dict.get('num_hidden_layers', 20),
             num_attention_heads=config_dict.get('num_attention_heads', 16),
             num_kv_heads=config_dict.get('num_key_value_heads', 4),
@@ -170,10 +170,10 @@ def parse_args():
     
     # Model configuration - H-BitLinear 1B
     parser.add_argument('--vocab_size', type=int, default=128256)
-    parser.add_argument('--hidden_size', type=int, default=1536)
+    parser.add_argument('--hidden_size', type=int, default=1024)
     parser.add_argument('--num_hidden_layers', type=int, default=20)
     parser.add_argument('--num_attention_heads', type=int, default=16)
-    parser.add_argument('--intermediate_size', type=int, default=3072)
+    parser.add_argument('--intermediate_size', type=int, default=2048)
     
     # Training configuration - Optimized for H-BitLinear
     parser.add_argument('--batch_size', type=int, default=4)
