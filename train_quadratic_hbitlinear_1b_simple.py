@@ -49,7 +49,7 @@ class SimpleHBitLinear1B(nn.Module):
             hidden_size=config_dict.get('hidden_size', 1024),
             num_hidden_layers=config_dict.get('num_hidden_layers', 20),
             num_attention_heads=config_dict.get('num_attention_heads', 16),
-            num_kv_heads=config_dict.get('num_key_value_heads', 4),
+            num_kv_heads=config_dict.get('num_key_value_heads', 16),
             max_position_embeddings=config_dict.get('max_position_embeddings', 1024),
             layer_norm_eps=config_dict.get('layer_norm_eps', 1e-5),
             hidden_dropout_prob=config_dict.get('hidden_dropout_prob', 0.1),
