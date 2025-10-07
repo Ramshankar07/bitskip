@@ -33,7 +33,7 @@ def find_output_directories() -> List[str]:
     
     # Look for directories matching the simple training output patterns
     patterns = [
-        "output-simple",
+        # "output-simple",
         "output-bitnet-2b-simple", 
         "output-hbitlinear-1b-simple",
         "output-hbitlinear-2b-simple"
@@ -209,7 +209,7 @@ def upload_all_simple_models(private: bool = False, username: str = None) -> Dic
     
     # Map output directories to repo names
     repo_mapping = {
-        "output-simple": f"{username}/bitnet-1b-simple",
+        # "output-simple": f"{username}/bitnet-1b-simple",
         "output-bitnet-2b-simple": f"{username}/bitnet-2b-simple", 
         "output-hbitlinear-1b-simple": f"{username}/hbitlinear-1b-simple",
         "output-hbitlinear-2b-simple": f"{username}/hbitlinear-2b-simple"
