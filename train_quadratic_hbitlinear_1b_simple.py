@@ -177,7 +177,7 @@ def parse_args():
     
     # Training configuration - Optimized for H-BitLinear
     parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--learning_rate', type=float, default=1e-4)
+    parser.add_argument('--learning_rate', type=float, default=5e-5)
     parser.add_argument('--max_length', type=int, default=1024)
     parser.add_argument('--num_steps', type=int, default=100)
     parser.add_argument('--gradient_accumulation_steps', type=int, default=1)
@@ -297,7 +297,15 @@ def main():
                 total_loss += loss.item()
             
             # Gradient clipping
-            grad_scaler.unscale_(optimizer)
+            try:
+                grad_scaler.unscale_(optimizer)
+            except RuntimeError as e:
+                if '_scale is None' in str(e):
+                    logger.warning(f'Gradient scaler issue at step {step}, skipping gradient update')
+                    optimizer.zero_grad()
+                    continue
+                else:
+                    raise
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             
             # Update weights
