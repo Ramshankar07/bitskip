@@ -1,4 +1,6 @@
-# BitSkip: BitNet with Learnable Early Exit and Routing
+# BitSkip: An Empirical Analysis of Quantization and Early Exit Composition
+https://arxiv.org/abs/2510.23766
+#### [<code>HF Checkpoint 🚀</code>](https://huggingface.co/Ram07/bitskip-v1-earlyexit) | [<code>Technical Report 📝</code>](https://arxiv.org/abs/2510.23766) 
 
 A PyTorch implementation of BitNet with advanced early exit mechanisms, learnable routing decisions, and joint optimization of quantization and routing losses.
 
@@ -231,11 +233,11 @@ python train_early_exit.py --lambda_q 0.1 --lambda_r 0.05 --num_steps 1000
 If you use this code in your research, please cite:
 
 ```bibtex
-@misc{bitskip2024,
-  title={BitSkip: BitNet with Learnable Early Exit and Routing},
-  author={Your Name},
-  year={2024},
-  url={https://github.com/your-repo/bitskip}
+@misc{bitskip,
+  title={BitSkip: An Empirical Analysis of Quantization and Early Exit Composition},
+  author={Ramshankar Bhuvaneswaran, Handan Liu},
+  year={2025},
+  url={https://github.com/ramshankar07/bitskip}
 }
 ```
 
