@@ -136,9 +136,9 @@ def generate_slurm_scripts():
 #SBATCH --mem=96GB
 #SBATCH --time=04:00:00
 
-# Activate environment if needed
-# source ~/.bashrc
-# conda activate bitskip
+# Activate environment
+source ~/.bashrc
+conda activate /home/bhuvaneshwaran.r/.conda/envs/env_pytorch
 
 echo "Job started at $(date)"
 cd {}
