@@ -135,9 +135,10 @@ def generate_slurm_scripts():
 #SBATCH --mem=96GB
 #SBATCH --time=01:00:00
 
-# Activate environment
+# Load Anaconda and activate environment
+module load anaconda3/2024.06
 source ~/.bashrc
-conda activate /home/bhuvaneshwaran.r/.conda/envs/env_pytorch
+conda activate env_pytorch
 
 echo "Job started at $(date)"
 # Use SLURM_SUBMIT_DIR to find the project root relative to where sbatch was called
