@@ -13,9 +13,11 @@ source ~/.bashrc
 conda activate /home/bhuvaneshwaran.r/.conda/envs/env_pytorch
 
 echo "Job started at $(date)"
-cd /Users/ram/Public/Study/BitSkipv2/bitskip
+# Go to project root (2 levels up from experiments/bitskip_wikitext2/)
+cd "$(dirname "$0")/../../"
+echo "Current directory: $(pwd)"
 
 # Run Stage 2
-python3 /Users/ram/Public/Study/BitSkipv2/bitskip/experiments/bitskip_wikitext2/run_experiments.py --stage 2
+python3 experiments/bitskip_wikitext2/run_experiments.py --stage 2
 
 echo "Job finished at $(date)"

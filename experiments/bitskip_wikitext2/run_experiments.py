@@ -140,7 +140,9 @@ source ~/.bashrc
 conda activate /home/bhuvaneshwaran.r/.conda/envs/env_pytorch
 
 echo "Job started at $(date)"
-cd {}
+# Go to project root (2 levels up from experiments/bitskip_wikitext2/)
+cd "$(dirname "$0")/../../"
+echo "Current directory: $(pwd)"
 """
 
     scripts = [
@@ -155,9 +157,9 @@ cd {}
     for filename, stage in scripts:
         filepath = os.path.join(SCRIPT_DIR, filename)
         with open(filepath, "w") as f:
-            f.write(slurm_header_template.format(stage, PROJECT_ROOT))
+            f.write(slurm_header_template.format(stage))
             f.write(f"\n# Run Stage {stage}\n")
-            f.write(f"python3 {os.path.abspath(__file__)} --stage {stage}\n")
+            f.write(f"python3 experiments/bitskip_wikitext2/run_experiments.py --stage {stage}\n")
             f.write("\necho \"Job finished at $(date)\"\n")
         
         print(f"Generated {filepath}")
