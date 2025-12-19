@@ -129,12 +129,11 @@ def generate_slurm_scripts():
 #SBATCH --job-name=BitSkip_Stage_{}
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=bhuvaneshwaran.r@northeastern.edu
-#SBATCH --partition=gpu
+#SBATCH --partition=sharing
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96GB
-#SBATCH --time=04:00:00
+#SBATCH --time=01:00:00
 
 # Activate environment
 source ~/.bashrc
