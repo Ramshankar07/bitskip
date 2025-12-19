@@ -13,8 +13,8 @@ source ~/.bashrc
 conda activate /home/bhuvaneshwaran.r/.conda/envs/env_pytorch
 
 echo "Job started at $(date)"
-# Go to project root (2 levels up from experiments/bitskip_wikitext2/)
-cd "$(dirname "$0")/../../"
+# Use SLURM_SUBMIT_DIR to find the project root relative to where sbatch was called
+cd "$SLURM_SUBMIT_DIR/../../"
 echo "Current directory: $(pwd)"
 
 # Run Stage 3
