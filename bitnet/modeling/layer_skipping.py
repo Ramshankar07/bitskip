@@ -70,9 +70,18 @@ class LayerSkipping(nn.Module):
             List of dropout probabilities for each layer
         """
         probs = []
+        schedule = getattr(self.config, 'dropout_schedule', 'quadratic')
+        
         for i in range(self.num_layers):
-            # Quadratic dropout: p_l = p_max * (l/L)^2
-            prob = self.max_dropout_rate * ((i / max(self.num_layers - 1, 1)) ** 2)
+            if schedule == 'uniform':
+                # Uniform dropout: p_l = p_max
+                prob = self.max_dropout_rate
+            elif schedule == 'linear':
+                # Linear dropout: p_l = p_max * (l/L)
+                prob = self.max_dropout_rate * (i / max(self.num_layers - 1, 1))
+            else:  # quadratic (default)
+                # Quadratic dropout: p_l = p_max * (l/L)^2
+                prob = self.max_dropout_rate * ((i / max(self.num_layers - 1, 1)) ** 2)
             probs.append(prob)
         return probs
     

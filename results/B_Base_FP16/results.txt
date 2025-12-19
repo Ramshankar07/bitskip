@@ -1,0 +1,1 @@
+Validation Perplexity: 25.0

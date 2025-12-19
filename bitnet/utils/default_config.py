@@ -26,7 +26,7 @@ class DefaultConfig:
     # Target: ~2.1B parameters with 12 layers, 1024 hidden dim, 16×64 attention heads
     vocab_size: int = 128256
     hidden_size: int = 2048  # dim (2^10 - power of 2 for H-BitLinear)
-    num_hidden_layers: int = 28  # num_layers (BitSkip specification)
+    num_hidden_layers: int = 16  # num_layers (Reduced for ~1B parameters)
     num_attention_heads: int = 16  # num_heads (BitSkip specification)
     num_kv_heads: int = 4  # num_kv_heads (2^2 - must divide hidden_size)
     head_dim: int = 128  # head_dim (1024/16 = 64, BitSkip specification)
@@ -51,6 +51,7 @@ class DefaultConfig:
     min_layers_to_keep: int = 4  # Appropriate for 12-layer model
     use_early_exit: bool = True
     early_exit_threshold: float = 0.95
+    dropout_schedule: str = "quadratic"  # quadratic, linear, uniform
     
     # Training
     learning_rate: float = 5e-5
