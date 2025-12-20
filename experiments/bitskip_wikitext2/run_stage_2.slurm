@@ -1,13 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=BitSkip_Stage_1
+#SBATCH --job-name=BitSkip_Stage_2
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=bhuvaneshwaran.r@northeastern.edu
-#SBATCH --partition=gpu
+#SBATCH --partition=short
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:h200:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=96GB
-#SBATCH --time=04:00:00
+#SBATCH --time=48:00:00
 
 # Load Anaconda and activate environment
 module load anaconda3/2024.06
