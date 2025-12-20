@@ -10,7 +10,8 @@ import sys
 # Define base paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
-BASE_CMD = f"python3 {os.path.join(SCRIPT_DIR, 'train.py')}"
+# Use sys.executable to ensure child processes use the same environment
+BASE_CMD = f"{sys.executable} {os.path.join(SCRIPT_DIR, 'train.py')}"
 OUTPUT_BASE_DIR = os.path.join(PROJECT_ROOT, "results")
 
 # Ensure output directory exists
@@ -137,7 +138,6 @@ def generate_slurm_scripts():
 
 # Load Anaconda and activate environment
 module load anaconda3/2024.06
-source ~/.bashrc
 conda activate env_pytorch
 
 echo "Job started at $(date)"
@@ -160,7 +160,7 @@ echo "Current directory: $(pwd)"
         with open(filepath, "w") as f:
             f.write(slurm_header_template.format(stage))
             f.write(f"\n# Run Stage {stage}\n")
-            f.write(f"python3 experiments/bitskip_wikitext2/run_experiments.py --stage {stage}\n")
+            f.write(f"python experiments/bitskip_wikitext2/run_experiments.py --stage {stage}\n")
             f.write("\necho \"Job finished at $(date)\"\n")
         
         print(f"Generated {filepath}")

@@ -10,7 +10,6 @@
 
 # Load Anaconda and activate environment
 module load anaconda3/2024.06
-source ~/.bashrc
 conda activate env_pytorch
 
 echo "Job started at $(date)"
@@ -19,6 +18,6 @@ cd "$SLURM_SUBMIT_DIR/../../"
 echo "Current directory: $(pwd)"
 
 # Run Stage 6
-python3 experiments/bitskip_wikitext2/run_experiments.py --stage 6
+python experiments/bitskip_wikitext2/run_experiments.py --stage 6
 
 echo "Job finished at $(date)"
