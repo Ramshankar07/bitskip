@@ -43,7 +43,7 @@ def parse_val_perplexity(model_id):
         print(f"Error parsing results for {model_id}: {e}")
         return float('inf')
 
-def run_experiment_stage(stage_name, experiments, dry_run=False):
+def run_experiment_stage(stage_name, experiments, dry_run=False, compile=False):
     print(f"\n--- Starting Stage: {stage_name} ---")
     results = {}
     
@@ -61,6 +61,9 @@ def run_experiment_stage(stage_name, experiments, dry_run=False):
         cmd_parts.append(f"--model_id {model_id}")
         cmd_parts.append(f"--precision {exp['precision']}")
         
+        if compile:
+            cmd_parts.append("--compile")
+            
         if exp["hadamard"]:
             cmd_parts.append("--use_hadamard")
             
@@ -172,6 +175,7 @@ def main():
     parser.add_argument("--stage", type=int, default=0, help="Run specific stage (1-6). 0 runs all.")
     parser.add_argument("--generate_slurm", action="store_true", help="Generate Slurm batch scripts")
     parser.add_argument("--dry_run", action="store_true", help="Print commands without running")
+    parser.add_argument("--compile", action="store_true", help="Use torch.compile for all experiments")
     args = parser.parse_args()
     
     if args.generate_slurm:
@@ -191,7 +195,7 @@ def main():
         for prec in ["int8", "int4"]:
              exp1_configs.append({"id": f"B_H_Base_{prec.upper()}", "precision": prec, "hadamard": True, "early_exit": False})
              
-        run_experiment_stage("Exp 1: Baselines", exp1_configs, dry_run=args.dry_run)
+        run_experiment_stage("Exp 1: Baselines", exp1_configs, dry_run=args.dry_run, compile=args.compile)
     
     # --- Experiment 2: Lambda Ablation ---
     if args.stage == 0 or args.stage == 2:
@@ -203,7 +207,7 @@ def main():
                     "precision": prec, "hadamard": False, "early_exit": True,
                     "lambda": lam, "p_max": 0.5, "schedule": "quadratic"
                 })
-        run_experiment_stage("Exp 2: Lambda Ablation", exp2_configs, dry_run=args.dry_run)
+        run_experiment_stage("Exp 2: Lambda Ablation", exp2_configs, dry_run=args.dry_run, compile=args.compile)
     
     # Determine Best Lambda (Needed for Stage 3, 4, 5)
     # We always need to calculate this if we are running later stages
@@ -222,7 +226,7 @@ def main():
                     "precision": prec, "hadamard": False, "early_exit": True,
                     "lambda": best_lambda, "p_max": p, "schedule": "quadratic"
                 })
-        run_experiment_stage(f"Exp 3: P_max Ablation (Lambda={best_lambda})", exp3_configs, dry_run=args.dry_run)
+        run_experiment_stage(f"Exp 3: P_max Ablation (Lambda={best_lambda})", exp3_configs, dry_run=args.dry_run, compile=args.compile)
         
     # Determine Best P_max (Needed for Stage 4, 5)
     best_p_max = P_MAXS[2] # Default 0.5
@@ -240,7 +244,7 @@ def main():
                     "precision": prec, "hadamard": False, "early_exit": True,
                     "lambda": best_lambda, "p_max": best_p_max, "schedule": sched
                 })
-        run_experiment_stage(f"Exp 4: Schedule Ablation (L={best_lambda}, P={best_p_max})", exp4_configs, dry_run=args.dry_run)
+        run_experiment_stage(f"Exp 4: Schedule Ablation (L={best_lambda}, P={best_p_max})", exp4_configs, dry_run=args.dry_run, compile=args.compile)
 
     # Determine Best Schedule
     best_sched = SCHEDULES[0] # Default quadratic
@@ -287,7 +291,7 @@ def main():
                     "schedule": best_sched,
                     "seed": seed
                 })
-        run_experiment_stage(f"Exp 5: Full Comparison (L={best_lambda}, P={best_p_max}, S={best_sched})", full_models_configs, dry_run=args.dry_run)
+        run_experiment_stage(f"Exp 5: Full Comparison (L={best_lambda}, P={best_p_max}, S={best_sched})", full_models_configs, dry_run=args.dry_run, compile=args.compile)
         
     # --- Experiment 6: Hadamard Analysis ---
     if args.stage == 0 or args.stage == 6:

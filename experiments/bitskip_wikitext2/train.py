@@ -50,6 +50,7 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size per device")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Gradient accumulation steps")
     parser.add_argument("--learning_rate", type=float, default=6e-4, help="Learning rate")
+    parser.add_argument("--compile", action="store_true", help="Use torch.compile to speed up training")
     
     return parser.parse_args()
 
@@ -161,6 +162,13 @@ def main():
     model = create_model(config)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
+    
+    if args.compile:
+        if hasattr(torch, "compile"):
+            logger.info("Compiling model with torch.compile...")
+            model = torch.compile(model)
+        else:
+            logger.warning("torch.compile is not available in this version of PyTorch. Skipping compilation.")
     
     # Optimizer & Scheduler
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.1)
