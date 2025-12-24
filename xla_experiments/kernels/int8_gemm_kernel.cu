@@ -1,32 +1,21 @@
-// INT8 GEMM kernel with dequantization using Tensor Cores
-#include <torch/extension.h>
+// INT8 GEMM kernel for torch.cuda._compile_kernel
+// Extracted kernel function from int8_gemm.cu
+
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <mma.h>
-
-#define CHECK_CUDA(x) TORCH_CHECK(x.device().is_cuda(), #x " must be CUDA tensor")
-#define CHECK_CONTIGUOUS(x) TORCH_CHECK(x.is_contiguous(), #x " must be contiguous")
-
 using namespace nvcuda;
 
-// MMA tile dimensions for INT8: m16n8k32
 constexpr int MMA_M = 16;
 constexpr int MMA_N = 8;
 constexpr int MMA_K = 32;
-
-// Block tile dimensions
 constexpr int BLOCK_M = 128;
 constexpr int BLOCK_N = 128;
 constexpr int BLOCK_K = 64;
-
-// Warp tile dimensions
 constexpr int WARP_M = 64;
 constexpr int WARP_N = 64;
-
-// Scale factor block size (like NVFP4)
 constexpr int SF_BLOCK_SIZE = 16;
 
-// Templated MMA instruction wrapper using inline PTX
 template <typename TypeAcc>
 __device__ inline
 void mma_m16n8k32_int8(const int A[4], const int B[2], TypeAcc C[4]) {
@@ -45,7 +34,6 @@ void mma_m16n8k32_int8(const int A[4], const int B[2], TypeAcc C[4]) {
     }
 }
 
-// Optimized INT8 GEMM kernel using Tensor Cores
 template <typename scalar_t>
 __global__ void int8_gemm_tensorcore_kernel(
     const int8_t* __restrict__ A,
@@ -55,40 +43,29 @@ __global__ void int8_gemm_tensorcore_kernel(
     const scalar_t* __restrict__ scale_b,
     int M, int N, int K
 ) {
-    // Thread and warp indices
     const int warp_id = threadIdx.x / 32;
     const int lane_id = threadIdx.x % 32;
     
-    // Block tile indices
     const int block_m = blockIdx.y * BLOCK_M;
     const int block_n = blockIdx.x * BLOCK_N;
     
-    // Shared memory for tiles
     __shared__ int8_t smem_A[BLOCK_M * BLOCK_K];
     __shared__ int8_t smem_B[BLOCK_K * BLOCK_N];
     
-    // Accumulator registers (INT32 for INT8 MMA)
     int acc[WARP_M / MMA_M][WARP_N / MMA_N][4] = {0};
     
-    // Load tiles from global memory to shared memory
-    // Cooperative loading across all threads in the block
     const int num_threads = blockDim.x;
     const int tid = threadIdx.x;
-    
-    // Number of elements to load
     const int A_tile_size = BLOCK_M * BLOCK_K;
     const int B_tile_size = BLOCK_K * BLOCK_N;
     
-    // Main loop over K dimension
     for (int k_block = 0; k_block < K; k_block += BLOCK_K) {
-        // Load A tile: [BLOCK_M, BLOCK_K]
         for (int i = tid; i < A_tile_size; i += num_threads) {
             int row = block_m + (i / BLOCK_K);
             int col = k_block + (i % BLOCK_K);
             smem_A[i] = (row < M && col < K) ? A[row * K + col] : 0;
         }
         
-        // Load B tile: [BLOCK_K, BLOCK_N]
         for (int i = tid; i < B_tile_size; i += num_threads) {
             int row = k_block + (i / BLOCK_N);
             int col = block_n + (i % BLOCK_N);
@@ -97,31 +74,23 @@ __global__ void int8_gemm_tensorcore_kernel(
         
         __syncthreads();
         
-        // Compute using Tensor Cores
-        // Each warp processes a WARP_M x WARP_N tile
         const int warp_m = (warp_id / (BLOCK_N / WARP_N)) * WARP_M;
         const int warp_n = (warp_id % (BLOCK_N / WARP_N)) * WARP_N;
         
-        // Loop over MMA tiles within the warp tile
         for (int k_mma = 0; k_mma < BLOCK_K; k_mma += MMA_K) {
             for (int m_mma = 0; m_mma < WARP_M / MMA_M; m_mma++) {
                 for (int n_mma = 0; n_mma < WARP_N / MMA_N; n_mma++) {
-                    // Load fragments for this MMA tile
                     int A_frag[4], B_frag[2];
                     
-                    // Load A fragment using ldmatrix pattern
-                    // Each thread loads specific elements based on lane_id
                     const int a_row = warp_m + m_mma * MMA_M + (lane_id % 16);
                     const int a_col = k_mma + (lane_id / 16) * 8;
                     
                     #pragma unroll
                     for (int i = 0; i < 4; i++) {
                         int offset = (a_row * BLOCK_K + a_col + i * 2);
-                        // Pack 4 int8 values into one 32-bit register
                         A_frag[i] = *reinterpret_cast<const int*>(&smem_A[offset]);
                     }
                     
-                    // Load B fragment
                     const int b_row = k_mma + (lane_id % 16) * 2;
                     const int b_col = warp_n + n_mma * MMA_N;
                     
@@ -131,7 +100,6 @@ __global__ void int8_gemm_tensorcore_kernel(
                         B_frag[i] = *reinterpret_cast<const int*>(&smem_B[offset]);
                     }
                     
-                    // Perform MMA operation
                     mma_m16n8k32_int8(A_frag, B_frag, acc[m_mma][n_mma]);
                 }
             }
@@ -140,25 +108,18 @@ __global__ void int8_gemm_tensorcore_kernel(
         __syncthreads();
     }
     
-    // Write results with scaling
-    // Apply block-level scaling factors (similar to NVFP4 approach)
     for (int m_mma = 0; m_mma < WARP_M / MMA_M; m_mma++) {
         for (int n_mma = 0; n_mma < WARP_N / MMA_N; n_mma++) {
             const int warp_m = (warp_id / (BLOCK_N / WARP_N)) * WARP_M;
             const int warp_n = (warp_id % (BLOCK_N / WARP_N)) * WARP_N;
             
-            // Each thread writes 4 elements (2x2 from the 16x8 output tile)
             const int out_row = block_m + warp_m + m_mma * MMA_M + (lane_id / 4);
             const int out_col = block_n + warp_n + n_mma * MMA_N + (lane_id % 4) * 2;
             
             if (out_row < M && out_col < N) {
-                // Apply scales with block-level granularity
                 const int m_block_idx = out_row / SF_BLOCK_SIZE;
                 const int n_block_idx = out_col / SF_BLOCK_SIZE;
-                
                 const scalar_t scale = scale_a[m_block_idx] * scale_b[n_block_idx];
-                
-                // Convert INT32 accumulator to output dtype with scaling
                 C[out_row * N + out_col] = static_cast<scalar_t>(acc[m_mma][n_mma][0]) * scale;
                 
                 if (out_col + 1 < N) {
@@ -168,13 +129,10 @@ __global__ void int8_gemm_tensorcore_kernel(
                 }
             }
             
-            // Write second row
             if (out_row + 8 < M && out_col < N) {
                 const int m_block_idx_2 = (out_row + 8) / SF_BLOCK_SIZE;
                 const int n_block_idx = out_col / SF_BLOCK_SIZE;
-                
                 const scalar_t scale_2 = scale_a[m_block_idx_2] * scale_b[n_block_idx];
-                
                 C[(out_row + 8) * N + out_col] = static_cast<scalar_t>(acc[m_mma][n_mma][2]) * scale_2;
                 
                 if (out_col + 1 < N) {
@@ -187,116 +145,3 @@ __global__ void int8_gemm_tensorcore_kernel(
     }
 }
 
-// Fallback naive kernel for small matrices or when Tensor Cores aren't optimal
-template <typename scalar_t>
-__global__ void int8_gemm_naive_kernel(
-    const int8_t* __restrict__ A,
-    const int8_t* __restrict__ B,
-    scalar_t* __restrict__ C,
-    const scalar_t* __restrict__ scale_a,
-    const scalar_t* __restrict__ scale_b,
-    int M, int N, int K
-) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (row < M && col < N) {
-        int32_t sum = 0;
-        
-        // Vectorized accumulation (4 elements at a time)
-        int k = 0;
-        for (; k + 3 < K; k += 4) {
-            sum += (int32_t)A[row * K + k + 0] * (int32_t)B[(k + 0) * N + col];
-            sum += (int32_t)A[row * K + k + 1] * (int32_t)B[(k + 1) * N + col];
-            sum += (int32_t)A[row * K + k + 2] * (int32_t)B[(k + 2) * N + col];
-            sum += (int32_t)A[row * K + k + 3] * (int32_t)B[(k + 3) * N + col];
-        }
-        
-        // Handle remainder
-        for (; k < K; k++) {
-            sum += (int32_t)A[row * K + k] * (int32_t)B[k * N + col];
-        }
-        
-        // Apply block-level scaling
-        const int m_block = row / SF_BLOCK_SIZE;
-        const int n_block = col / SF_BLOCK_SIZE;
-        C[row * N + col] = (scalar_t)sum * scale_a[m_block] * scale_b[n_block];
-    }
-}
-
-torch::Tensor int8_gemm_cuda(
-    torch::Tensor a,
-    torch::Tensor b,
-    torch::Tensor scale_a,
-    torch::Tensor scale_b
-) {
-    CHECK_CUDA(a);
-    CHECK_CUDA(b);
-    CHECK_CONTIGUOUS(a);
-    CHECK_CONTIGUOUS(b);
-    
-    int M = a.size(0);
-    int K = a.size(1);
-    int N = b.size(1);
-    
-    // Validate scale dimensions
-    TORCH_CHECK(scale_a.numel() == M / SF_BLOCK_SIZE, 
-                "scale_a size mismatch: expected ", M / SF_BLOCK_SIZE, " got ", scale_a.numel());
-    TORCH_CHECK(scale_b.numel() == N / SF_BLOCK_SIZE,
-                "scale_b size mismatch: expected ", N / SF_BLOCK_SIZE, " got ", scale_b.numel());
-    
-    auto options = torch::TensorOptions().dtype(torch::kFloat32).device(a.device());
-    auto c = torch::zeros({M, N}, options);
-    
-    // Get CUDA device properties
-    int device;
-    cudaGetDevice(&device);
-    cudaDeviceProp prop;
-    cudaGetDeviceProperties(&prop, device);
-    
-    // Decide kernel based on problem size and architecture
-    bool use_tensorcore = (M >= 128 && N >= 128 && K >= 64) && 
-                          (prop.major >= 7); // Tensor Cores available from Volta (sm_70)
-    
-    if (use_tensorcore) {
-        // Use Tensor Core kernel
-        const int threads_per_block = 256;
-        dim3 block(threads_per_block);
-        dim3 grid(
-            (N + BLOCK_N - 1) / BLOCK_N,
-            (M + BLOCK_M - 1) / BLOCK_M
-        );
-        
-        AT_DISPATCH_FLOATING_TYPES_AND_HALF(c.scalar_type(), "int8_gemm_tensorcore", ([&] {
-            int8_gemm_tensorcore_kernel<scalar_t><<<grid, block>>>(
-                a.data_ptr<int8_t>(),
-                b.data_ptr<int8_t>(),
-                c.data_ptr<scalar_t>(),
-                scale_a.data_ptr<scalar_t>(),
-                scale_b.data_ptr<scalar_t>(),
-                M, N, K
-            );
-        }));
-    } else {
-        // Use naive kernel for small matrices
-        dim3 block(16, 16);
-        dim3 grid((N + 15) / 16, (M + 15) / 16);
-        
-        AT_DISPATCH_FLOATING_TYPES_AND_HALF(c.scalar_type(), "int8_gemm_naive", ([&] {
-            int8_gemm_naive_kernel<scalar_t><<<grid, block>>>(
-                a.data_ptr<int8_t>(),
-                b.data_ptr<int8_t>(),
-                c.data_ptr<scalar_t>(),
-                scale_a.data_ptr<scalar_t>(),
-                scale_b.data_ptr<scalar_t>(),
-                M, N, K
-            );
-        }));
-    }
-    
-    return c;
-}
-
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-    m.def("int8_gemm", &int8_gemm_cuda, "INT8 GEMM with dequantization (CUDA)");
-}

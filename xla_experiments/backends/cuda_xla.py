@@ -7,9 +7,8 @@ import torch.nn as nn
 from .base import Backend, BackendType
 from .native_pytorch import NativePyTorchBackend
 
-# Try to import torch_xla
 _torch_xla_available = False
-try:
+try:    
     import torch_xla
     import torch_xla.core.xla_model as xm
     _torch_xla_available = True

@@ -2,8 +2,13 @@
 """Run all XLA backend experiments."""
 
 import argparse
-from .config import BenchmarkConfig, BackendType
-from .benchmark import Benchmark
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from xla_experiments.config import BenchmarkConfig, BackendType
+from xla_experiments.benchmark import Benchmark
 
 
 def main():

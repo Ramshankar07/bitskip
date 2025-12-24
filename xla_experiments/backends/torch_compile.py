@@ -1,4 +1,4 @@
-"""torch.compile backend - wraps existing modules with TorchDynamo."""
+#torch.compile backend - compiles entire model with TorchDynamo
 
 from typing import Dict, Any
 import torch
@@ -21,15 +21,13 @@ class TorchCompileBackend(Backend):
     def is_available(self) -> bool:
         return hasattr(torch, 'compile')
     
-    def _compile(self, module: nn.Module) -> nn.Module:
-        return torch.compile(module, mode=self.mode)
-    
     def get_bitlinear(self, in_features: int, out_features: int) -> nn.Module:
-        return self._compile(self._native.get_bitlinear(in_features, out_features))
+        return self._native.get_bitlinear(in_features, out_features)
     
     def get_hbitlinear(self, in_features: int, out_features: int) -> nn.Module:
-        return self._compile(self._native.get_hbitlinear(in_features, out_features))
+        return self._native.get_hbitlinear(in_features, out_features)
     
     def get_model(self, config: Dict[str, Any], use_hadamard: bool = False) -> nn.Module:
-        return self._compile(self._native.get_model(config, use_hadamard))
+        model = self._native.get_model(config, use_hadamard)
+        return torch.compile(model, mode=self.mode)
 
