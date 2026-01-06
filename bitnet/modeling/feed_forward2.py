@@ -24,15 +24,9 @@ class BitFeedForward2(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.mlp_ratio = getattr(config, 'mlp_ratio', 2.0)  # Default to 2.0 for smaller model (power of 2)
+        self.mlp_ratio = getattr(config, 'mlp_ratio', 2.0)  # Default to 2.0 for smaller model
         self.intermediate_size = int(self.hidden_size * self.mlp_ratio)
         self.activation_bits = config.activation_bits  # Get from config
-        
-        # Ensure dimensions are powers of 2 for H-BitLinear
-        if not (self.hidden_size & (self.hidden_size - 1) == 0):
-            raise ValueError(f"hidden_size ({self.hidden_size}) must be a power of 2 for H-BitLinear")
-        if not (self.intermediate_size & (self.intermediate_size - 1) == 0):
-            raise ValueError(f"intermediate_size ({self.intermediate_size}) must be a power of 2 for H-BitLinear")
         
         # Log dimensions
         logger.info(f"BitFeedForward2 initialized with hidden_size={self.hidden_size}, intermediate_size={self.intermediate_size} (mlp_ratio={self.mlp_ratio}), activation_bits={self.activation_bits}")

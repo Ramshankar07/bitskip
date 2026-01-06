@@ -57,11 +57,7 @@ class BitNetGQA2(nn.Module):
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError(f"num_heads ({num_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
         
-        # Ensure head_dim is power of 2 for H-BitLinear
-        if not self._is_power_of_2(self.head_dim):
-            raise ValueError(f"head_dim ({self.head_dim}) must be a power of 2 for H-BitLinear")
-        
-        # Query projection using H-BitLinear
+        # Query projection using H-BitLinear (now supports arbitrary dimensions)
         self.q_proj = HBitLinear(
             in_features=hidden_size,
             out_features=hidden_size,
@@ -97,12 +93,6 @@ class BitNetGQA2(nn.Module):
         
         # Scaling factor for attention scores
         self.scale = 1.0 / math.sqrt(self.head_dim)
-        
-            
-    def _is_power_of_2(self, n: int) -> bool:
-        """Check if a number is a power of 2."""
-        return n > 0 and (n & (n - 1)) == 0
-    
     
     
     def _repeat_kv(self, x: torch.Tensor, n_rep: int) -> torch.Tensor:

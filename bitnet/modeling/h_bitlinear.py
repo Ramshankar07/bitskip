@@ -8,6 +8,14 @@ import torch.nn.functional as F
 from .kernels import fwht
 
 
+def _next_power_of_2(n: int) -> int:
+    """Return the next power of 2 greater than or equal to n."""
+    if n <= 0:
+        return 1
+    if (n & (n - 1)) == 0:
+        return n  # Already a power of 2
+    return 1 << (n - 1).bit_length()
+
 
 def hadamard_transform(x: torch.Tensor) -> torch.Tensor:
     """Apply Hadamard transform with CUDA acceleration (falls back to CPU)."""
@@ -18,9 +26,11 @@ class HBitLinear(nn.Module):
     """
     H-BitLinear layer with Hadamard transformation, Layer Normalization, and quantization.
     
+    Supports arbitrary dimensions by automatically padding to the next power of 2 for FWHT.
+    
     Args:
-        in_features: Input feature dimension (must be power of 2)
-        out_features: Output feature dimension (must be power of 2)
+        in_features: Input feature dimension (will be padded to next power of 2 if needed)
+        out_features: Output feature dimension (will be padded to next power of 2 if needed)
         bias: Whether to use bias (default: False)
         device: Device to use
         dtype: Data type to use
@@ -37,28 +47,30 @@ class HBitLinear(nn.Module):
     ):
         super().__init__()
 
-        # Verify dimensions are powers of 2
-        if not (in_features & (in_features - 1) == 0):
-            raise ValueError(f"in_features must be a power of 2, got {in_features}")
-        if not (out_features & (out_features - 1) == 0):
-            raise ValueError(f"out_features must be a power of 2, got {out_features}")
-
         factory_kwargs = {'device': device, 'dtype': dtype}
         self.in_features = in_features
         self.out_features = out_features
         self.activation_bits = activation_bits
 
-        # Initialize weights
-        self.weight = nn.Parameter(torch.empty((out_features, in_features), **factory_kwargs))
+        # Calculate padded dimensions for FWHT (must be powers of 2)
+        self.in_features_padded = _next_power_of_2(in_features)
+        self.out_features_padded = _next_power_of_2(out_features)
+        
+        # Calculate padding amounts
+        self.in_pad = self.in_features_padded - in_features
+        self.out_pad = self.out_features_padded - out_features
+
+        # Initialize weights with padded dimensions
+        self.weight = nn.Parameter(torch.empty((self.out_features_padded, self.in_features_padded), **factory_kwargs))
         self.register_buffer('weight_scale', torch.ones(1, **factory_kwargs))
 
         if bias:
-            self.bias = nn.Parameter(torch.zeros(out_features, **factory_kwargs))
+            self.bias = nn.Parameter(torch.zeros(self.out_features_padded, **factory_kwargs))
         else:
             self.register_parameter('bias', None)
 
-        # Add Layer Normalization
-        self.layer_norm = nn.LayerNorm(in_features, **factory_kwargs)
+        # Add Layer Normalization with padded dimension
+        self.layer_norm = nn.LayerNorm(self.in_features_padded, **factory_kwargs)
 
         # Initialize weights using standard initialization
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
@@ -119,6 +131,7 @@ class HBitLinear(nn.Module):
     def forward(self, x: torch.Tensor) -> Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]]:
         """
         Forward pass with Layer Normalization, Hadamard transformation, and QAT using STE.
+        Automatically handles padding/unpadding for non-power-of-2 dimensions.
         Does not modify parameters in-place.
         """
         # Store original shape for reshaping
@@ -127,8 +140,14 @@ class HBitLinear(nn.Module):
         expected_output_shape[-1] = self.out_features
         expected_output_shape = tuple(expected_output_shape)
 
-        # LayerNorm
-        x_ln = self.layer_norm(x)
+        # Pad input to power of 2 if needed
+        if self.in_pad > 0:
+            x_padded = F.pad(x, (0, self.in_pad), mode='constant', value=0.0)
+        else:
+            x_padded = x
+
+        # LayerNorm (on padded input)
+        x_ln = self.layer_norm(x_padded)
 
         # Activation fake-quant (per-token) with STE
         bits = self.activation_bits
@@ -139,7 +158,7 @@ class HBitLinear(nn.Module):
         if bool(self.training):
             x_q = x_ln - x_ln.detach() + x_q.detach()
 
-        # Hadamard transform on fake-quant activations
+        # Hadamard transform on fake-quant activations (now power of 2)
         x_h = hadamard_transform(x_q)
 
         # Weight fake-quant (ternary) with STE
@@ -154,18 +173,15 @@ class HBitLinear(nn.Module):
         # Linear on flattened last-dim, then reshape
         x_h_flat = x_h.view(-1, x_h.shape[-1])
         output_flat = F.linear(x_h_flat, w_q, self.bias)
-        try:
-            output = output_flat.view(expected_output_shape)
-        except RuntimeError as e:
-            print(f"DEBUG: Reshape error in H-BitLinear")
-            print(f"  x_h shape: {x_h.shape}, elements: {x_h.numel()}")
-            print(f"  x_h_flat shape: {x_h_flat.shape}, elements: {x_h_flat.numel()}")
-            print(f"  output_flat shape: {output_flat.shape}, elements: {output_flat.numel()}")
-            print(f"  original_shape: {original_shape}")
-            print(f"  expected_output_shape: {expected_output_shape}")
-            print(f"  expected elements: {torch.tensor(expected_output_shape).prod().item()}")
-            raise e
+        output_padded = output_flat.view(*original_shape[:-1], self.out_features_padded)
 
         # Inverse Hadamard
-        output = hadamard_transform(output)
+        output_padded = hadamard_transform(output_padded)
+
+        # Unpad output back to original out_features
+        if self.out_pad > 0:
+            output = output_padded[..., :self.out_features]
+        else:
+            output = output_padded
+
         return output
