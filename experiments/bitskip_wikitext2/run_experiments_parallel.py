@@ -16,6 +16,7 @@ import atexit
 from concurrent.futures import ProcessPoolExecutor, as_completed, wait, ALL_COMPLETED
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from tqdm import tqdm
 
 # Define base paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -215,7 +216,7 @@ def run_single_experiment(args_tuple: Tuple[Dict, int, bool]) -> Tuple[str, floa
     # Check if already completed
     existing_ppl = parse_val_perplexity(model_id)
     if existing_ppl != float('inf'):
-        print(f"✓ {model_id} already completed (PPL: {existing_ppl:.2f})")
+        print(f"[OK] {model_id} already completed (PPL: {existing_ppl:.2f})")
         return (model_id, existing_ppl, True)
     
     # Build command with GPU assignment
@@ -265,10 +266,10 @@ def run_single_experiment(args_tuple: Tuple[Dict, int, bool]) -> Tuple[str, floa
         if process.returncode == 0:
             ppl = parse_val_perplexity(model_id)
             if ppl != float('inf'):
-                print(f"✓ {model_id} completed in {elapsed:.1f}s (PPL: {ppl:.2f})")
+                print(f"[OK] {model_id} completed in {elapsed:.1f}s (PPL: {ppl:.2f})")
                 return (model_id, ppl, True)
             else:
-                print(f"✗ {model_id} completed but no results found")
+                print(f"[FAIL] {model_id} completed but no results found")
                 return (model_id, float('inf'), False)
         else:
             # Check log file for OOM errors
@@ -283,14 +284,14 @@ def run_single_experiment(args_tuple: Tuple[Dict, int, bool]) -> Tuple[str, floa
                 pass
             
             if oom_detected:
-                print(f"✗ {model_id} failed due to CUDA OOM (check {log_file})")
+                print(f"[FAIL] {model_id} failed due to CUDA OOM (check {log_file})")
                 print(f"  Tip: Try reducing --max_workers or --max_gpu_workers, or reduce batch size in config")
             else:
-                print(f"✗ {model_id} failed (check {log_file})")
+                print(f"[FAIL] {model_id} failed (check {log_file})")
             return (model_id, float('inf'), False)
             
     except Exception as e:
-        print(f"✗ {model_id} raised exception: {e}")
+        print(f"[FAIL] {model_id} raised exception: {e}")
         return (model_id, float('inf'), False)
 
 
@@ -337,7 +338,7 @@ def run_stage_parallel(
     
     # Warn if max_workers exceeds GPU capacity
     if max_workers > len(available_gpus) and max_gpu_workers < max_workers:
-        print(f"⚠ WARNING: max_workers ({max_workers}) > available GPUs ({len(available_gpus)})")
+        print(f"WARNING: max_workers ({max_workers}) > available GPUs ({len(available_gpus)})")
         print(f"  Limiting concurrent GPU workers to {max_gpu_workers} to prevent OOM errors")
         print(f"  Consider setting --max_gpu_workers={max_gpu_workers} or reducing --max_workers")
     
@@ -358,33 +359,78 @@ def run_stage_parallel(
             future = _executor.submit(run_single_experiment, (exp, gpu_id, compile_flag))
             future_to_exp[future] = exp
         
+        # Initialize progress bar
+        pbar = tqdm(total=len(experiments), desc=f"Stage: {stage_name}", unit="exp")
+        pbar.set_postfix({"completed": 0, "successful": 0, "failed": 0, "best_ppl": "N/A"})
+        
+        # Track experiment times for ETA calculation
+        experiment_times = []
+        
         # Collect results as they complete - as_completed() blocks until ALL futures are done
         completed = 0
-        pending = len(experiments)
-        
-        print(f"Waiting for all {pending} experiments to complete...")
-        print("(This may take a while for long-running experiments)\n")
+        successful = 0
+        failed = 0
         
         # Iterate through completed futures - this blocks until all are done
         # as_completed() yields futures as they finish, but waits for ALL to complete
         for future in as_completed(future_to_exp):
+            exp_start_time = time.time()
             try:
                 model_id, ppl, success = future.result()
                 results[model_id] = ppl
                 completed += 1
-                pending -= 1
                 
-                status = "✓" if success else "✗"
+                if success:
+                    successful += 1
+                    status_str = "OK"
+                else:
+                    failed += 1
+                    status_str = "FAIL"
+                
                 elapsed = time.time() - stage_start_time
-                ppl_str = f"{ppl:.2f}" if ppl != float('inf') else "N/A"
-                print(f"{status} [{completed}/{len(experiments)}] {model_id} completed (PPL: {ppl_str}, {pending} remaining, {elapsed/60:.1f}m elapsed)")
+                exp_time = time.time() - exp_start_time
+                experiment_times.append(exp_time)
+                
+                # Calculate ETA
+                if completed > 0 and len(experiment_times) > 0:
+                    avg_time = sum(experiment_times) / len(experiment_times)
+                    remaining = len(experiments) - completed
+                    eta_seconds = avg_time * remaining
+                    eta_str = f"{eta_seconds/60:.1f}m" if eta_seconds > 60 else f"{eta_seconds:.0f}s"
+                else:
+                    eta_str = "N/A"
+                
+                # Update progress bar
+                best_ppl = min([ppl for ppl in results.values() if ppl != float('inf')], default=float('inf'))
+                best_ppl_str = f"{best_ppl:.2f}" if best_ppl != float('inf') else "N/A"
+                pbar.set_postfix({
+                    "completed": completed,
+                    "successful": successful,
+                    "failed": failed,
+                    "best_ppl": best_ppl_str,
+                    "eta": eta_str
+                })
+                pbar.set_description(f"Stage: {stage_name} | {model_id} [{status_str}]")
+                pbar.update(1)
+                
             except Exception as e:
                 exp_config = future_to_exp[future]
                 model_id = exp_config.get("id", "unknown")
-                print(f"✗ [{completed}/{len(experiments)}] {model_id} raised exception: {e}")
                 results[model_id] = float('inf')
                 completed += 1
-                pending -= 1
+                failed += 1
+                
+                elapsed = time.time() - stage_start_time
+                pbar.set_postfix({
+                    "completed": completed,
+                    "successful": successful,
+                    "failed": failed,
+                    "best_ppl": "N/A"
+                })
+                pbar.set_description(f"Stage: {stage_name} | {model_id} [ERROR]")
+                pbar.update(1)
+        
+        pbar.close()
         
         # Explicitly verify all futures completed (as_completed should have handled this, but double-check)
         all_futures = list(future_to_exp.keys())
@@ -399,10 +445,10 @@ def run_stage_parallel(
                     _, ppl, success = future.result(timeout=3600)  # 1 hour timeout per experiment
                     results[model_id] = ppl
                 except Exception as e:
-                    print(f"✗ {model_id} failed with exception: {e}")
+                    print(f"[FAIL] {model_id} failed with exception: {e}")
                     results[model_id] = float('inf')
         
-        print(f"\n✓ All {len(experiments)} experiments have completed.")
+        print(f"\nAll {len(experiments)} experiments have completed.")
     finally:
         # Cleanup executor
         _executor.shutdown(wait=True)
@@ -429,11 +475,11 @@ def run_stage_parallel(
     
     # Print summary
     stage_elapsed = time.time() - stage_start_time
-    successful = sum(1 for ppl in results.values() if ppl != float('inf'))
+    successful_count = sum(1 for ppl in results.values() if ppl != float('inf'))
     print(f"\n{'='*60}")
-    print(f"Stage Complete: {successful}/{len(experiments)} successful")
+    print(f"Stage Complete: {successful_count}/{len(experiments)} successful")
     print(f"Stage Duration: {stage_elapsed/60:.1f} minutes")
-    if successful > 0:
+    if successful_count > 0:
         best_ppl = min(ppl for ppl in results.values() if ppl != float('inf'))
         print(f"Best PPL: {best_ppl:.2f}")
     print(f"{'='*60}\n")
@@ -477,7 +523,7 @@ def get_best_param_from_cache(param_name: str, search_values: List, prefix_templ
         return search_values[0] if search_values else 0.0
     
     best_val = min(avg_ppls, key=avg_ppls.get)
-    print(f"✓ Best {param_name}: {best_val} (Avg PPL: {avg_ppls[best_val]:.2f})")
+    print(f"[OK] Best {param_name}: {best_val} (Avg PPL: {avg_ppls[best_val]:.2f})")
     return best_val
 
 
@@ -507,7 +553,7 @@ def get_best_schedule_from_cache(schedules: List[str]) -> str:
     
     if any(v != float('inf') for v in avg_ppls.values()):
         best_sched = min(avg_ppls, key=avg_ppls.get)
-        print(f"✓ Best Schedule: {best_sched} (Avg PPL: {avg_ppls[best_sched]:.2f})")
+        print(f"[OK] Best Schedule: {best_sched} (Avg PPL: {avg_ppls[best_sched]:.2f})")
         return best_sched
     else:
         print("Warning: Could not determine best schedule. Using default.")

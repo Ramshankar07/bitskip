@@ -24,12 +24,17 @@ class ExperimentConfig:
     dropout_schedule: str = "quadratic" # quadratic, linear, uniform
     
     # Training
-    batch_size: int = 32
-    gradient_accumulation_steps: int = 2
+    batch_size: int = 16
+    gradient_accumulation_steps: int = 4
     learning_rate: float = 6e-4
-    num_steps: int = 50000
+    num_steps: int = 30000
     warmup_steps: int = 1000
     seed: int = 42
+    
+    # Early Stopping
+    eval_every_steps: int = 2000  # Evaluate validation every N steps
+    patience: int = 5  # Stop after N evaluations without improvement
+    min_delta: float = 0.01  # Minimum improvement threshold for validation perplexity
     
     def __post_init__(self):
         # Ensure hidden_size is divisible by heads

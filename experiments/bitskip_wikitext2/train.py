@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 from datasets import load_dataset
 from safetensors.torch import save_file
+from tqdm import tqdm
 
 import sys
 # Add project root to sys.path to resolve bitnet package
@@ -47,8 +48,8 @@ def parse_args():
     
     # Training Overrides
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--batch_size", type=int, default=32, help="Batch size per device")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=2, help="Gradient accumulation steps")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size per device")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=4, help="Gradient accumulation steps")
     parser.add_argument("--learning_rate", type=float, default=6e-4, help="Learning rate")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile to speed up training")
     
@@ -181,11 +182,22 @@ def main():
         optimizer, num_warmup_steps=config.warmup_steps, num_training_steps=num_training_steps
     )
     
+    # Early stopping state
+    best_val_ppl = float('inf')
+    patience_counter = 0
+    best_model_state = None
+    early_stopped = False
+    
     # Training Loop
     logger.info(f"Starting training for {args.model_id}...")
+    logger.info(f"Early stopping: eval every {config.eval_every_steps} steps, patience={config.patience}, min_delta={config.min_delta}")
     model.train()
     global_step = 0
     total_loss = 0.0
+    
+    # Initialize progress bar
+    pbar = tqdm(total=num_training_steps, desc=f"Training {args.model_id}", unit="step")
+    pbar.set_postfix({"loss": "N/A", "val_ppl": "N/A"})
     
     while global_step < num_training_steps:
         for batch in train_loader:
@@ -229,16 +241,84 @@ def main():
                 scheduler.step()
                 optimizer.zero_grad()
                 
+                # Update progress bar
+                current_loss = loss.item() * config.gradient_accumulation_steps
+                pbar.set_postfix({"loss": f"{current_loss:.4f}", "val_ppl": f"{best_val_ppl:.2f}" if best_val_ppl != float('inf') else "N/A"})
+                
                 if (global_step + 1) % 100 == 0:
-                    logger.info(f"Step {global_step+1}/{num_training_steps} | Loss: {loss.item() * config.gradient_accumulation_steps:.4f}")
+                    logger.info(f"Step {global_step+1}/{num_training_steps} | Loss: {current_loss:.4f}")
             
             global_step += 1
+            pbar.update(1)
             
+            # Periodic validation and early stopping check
+            if global_step % config.eval_every_steps == 0:
+                model.eval()
+                val_loss = 0.0
+                val_steps = 0
+                
+                with torch.no_grad():
+                    for val_batch in val_loader:
+                        val_input_ids = val_batch["input_ids"].to(device)
+                        val_attention_mask = val_batch["attention_mask"].to(device)
+                        val_labels = val_batch["labels"].to(device)
+                        
+                        val_outputs = model(
+                            input_ids=val_input_ids,
+                            attention_mask=val_attention_mask,
+                            labels=val_labels
+                        )
+                        val_loss += val_outputs.loss.item()
+                        val_steps += 1
+                
+                avg_val_loss = val_loss / val_steps
+                val_ppl = math.exp(avg_val_loss)
+                
+                logger.info(f"Validation at step {global_step}: PPL={val_ppl:.2f}, Best={best_val_ppl:.2f}")
+                
+                # Check for improvement
+                if val_ppl < best_val_ppl - config.min_delta:
+                    best_val_ppl = val_ppl
+                    patience_counter = 0
+                    best_model_state = model.state_dict().copy()
+                    logger.info(f"New best validation PPL: {best_val_ppl:.2f} (improvement: {best_val_ppl:.2f})")
+                else:
+                    patience_counter += 1
+                    logger.info(f"No improvement. Patience: {patience_counter}/{config.patience}")
+                    
+                    if patience_counter >= config.patience:
+                        logger.info(f"Early stopping triggered at step {global_step} (no improvement for {config.patience} evaluations)")
+                        early_stopped = True
+                        if best_model_state is not None:
+                            model.load_state_dict(best_model_state)
+                            logger.info("Loaded best model state")
+                        break
+                
+                model.train()
+            
+            if early_stopped:
+                break
+        
+        if early_stopped:
+            break
+    
+    pbar.close()
+    
+    # Load best model if early stopping occurred and we have a saved state
+    if early_stopped and best_model_state is not None:
+        model.load_state_dict(best_model_state)
+        logger.info("Using best model checkpoint for final evaluation")
+            
+    # Ensure we're using the best model for final evaluation
+    if best_model_state is not None and not early_stopped:
+        model.load_state_dict(best_model_state)
+        logger.info("Loaded best model checkpoint for final evaluation")
+    
     # Save Model
     logger.info(f"Saving model to {run_dir}")
     save_file(model.state_dict(), os.path.join(run_dir, "model.safetensors"))
     
-    # Evaluation
+    # Final Evaluation
     logger.info("Evaluating on Validation Set...")
     model.eval()
     total_eval_loss = 0.0
@@ -257,14 +337,20 @@ def main():
             )
             total_eval_loss += outputs.loss.item()
             eval_steps += 1
-            
+    
     avg_eval_loss = total_eval_loss / eval_steps
     perplexity = math.exp(avg_eval_loss)
-    logger.info(f"Validation Perplexity: {perplexity:.2f}")
+    logger.info(f"Final Validation Perplexity: {perplexity:.2f}")
+    if early_stopped:
+        logger.info(f"Training stopped early at step {global_step} (best PPL: {best_val_ppl:.2f})")
     
     # Write results to file
     with open(os.path.join(run_dir, "results.txt"), "w") as f:
         f.write(f"Validation Perplexity: {perplexity:.2f}\n")
+        if early_stopped:
+            f.write(f"Early Stopped: True\n")
+            f.write(f"Final Step: {global_step}\n")
+            f.write(f"Best Validation PPL: {best_val_ppl:.2f}\n")
 
 if __name__ == "__main__":
     main()
