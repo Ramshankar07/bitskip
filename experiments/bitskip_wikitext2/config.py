@@ -27,7 +27,7 @@ class ExperimentConfig:
     batch_size: int = 16
     gradient_accumulation_steps: int = 4
     learning_rate: float = 6e-4
-    num_steps: int = 30000
+    num_steps: int = 10000
     warmup_steps: int = 1000
     seed: int = 42
     
