@@ -13,9 +13,11 @@ PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
 # Use sys.executable to ensure child processes use the same environment
 BASE_CMD = f"{sys.executable} {os.path.join(SCRIPT_DIR, 'train.py')}"
 OUTPUT_BASE_DIR = os.path.join(PROJECT_ROOT, "results")
+LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 
-# Ensure output directory exists
+# Ensure output directories exist
 os.makedirs(OUTPUT_BASE_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
 
 def run_command(cmd, log_file):
     print(f"Running: {cmd}")
@@ -49,7 +51,7 @@ def run_experiment_stage(stage_name, experiments, dry_run=False, compile=False):
     
     for exp in experiments:
         model_id = exp["id"]
-        log_file = os.path.join(OUTPUT_BASE_DIR, f"{model_id}.log")
+        log_file = os.path.join(LOGS_DIR, f"{model_id}.log")
         
         # Skip if already done successfully
         if os.path.exists(log_file) and parse_val_perplexity(model_id) != float('inf'):

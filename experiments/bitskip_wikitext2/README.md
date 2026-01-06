@@ -5,8 +5,10 @@ This directory contains experiments to investigate the interaction between quant
 ## Structure
 
 - `train.py`: Main training script supporting all configurations.
-- `run_experiments.py`: Script to generate and run all experiment commands.
-- `results/`: Directory to store logs and checkpoints.
+- `run_experiments.py`: Script to generate and run all experiment commands (sequential).
+- `run_experiments_parallel.py`: Script to run experiments in parallel with result caching.
+- `results/`: Directory to store experiment results and checkpoints.
+- `logs/`: Directory to store experiment log files.
 
 ## Experiments
 

@@ -20,10 +20,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
 BASE_CMD = f"{sys.executable} {os.path.join(SCRIPT_DIR, 'train.py')}"
 OUTPUT_BASE_DIR = os.path.join(PROJECT_ROOT, "results")
+LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 RESULTS_CACHE_FILE = os.path.join(OUTPUT_BASE_DIR, "results_cache.json")
 
-# Ensure output directory exists
+# Ensure output directories exist
 os.makedirs(OUTPUT_BASE_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
 
 
 def load_results_cache() -> Dict:
@@ -94,7 +96,7 @@ def run_single_experiment(args_tuple: Tuple[Dict, bool]) -> Tuple[str, float, bo
         (model_id, perplexity, success)
     """
     model_id = exp_config["id"]
-    log_file = os.path.join(OUTPUT_BASE_DIR, f"{model_id}.log")
+    log_file = os.path.join(LOGS_DIR, f"{model_id}.log")
     
     # Check if already completed
     existing_ppl = parse_val_perplexity(model_id)
