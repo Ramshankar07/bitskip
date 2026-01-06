@@ -11,7 +11,7 @@ import time
 import re
 import argparse
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed, wait, ALL_COMPLETED
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -168,7 +168,7 @@ def run_stage_parallel(
     compile_flag: bool = False
 ) -> Dict[str, float]:
     """
-    Run a stage's experiments in parallel.
+    Run a stage's experiments in parallel and wait for all to complete.
     
     Returns:
         Dictionary mapping model_id to perplexity
@@ -180,6 +180,7 @@ def run_stage_parallel(
     print(f"{'='*60}")
     
     results = {}
+    stage_start_time = time.time()
     
     # Run experiments in parallel
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -189,13 +190,60 @@ def run_stage_parallel(
             for exp in experiments
         }
         
-        # Collect results as they complete
+        # Collect results as they complete - as_completed() blocks until ALL futures are done
         completed = 0
+        pending = len(experiments)
+        
+        print(f"Waiting for all {pending} experiments to complete...")
+        print("(This may take a while for long-running experiments)\n")
+        
+        # Iterate through completed futures - this blocks until all are done
+        # as_completed() yields futures as they finish, but waits for ALL to complete
         for future in as_completed(future_to_exp):
-            model_id, ppl, success = future.result()
-            results[model_id] = ppl
-            completed += 1
-            print(f"Progress: {completed}/{len(experiments)} experiments completed")
+            try:
+                model_id, ppl, success = future.result()
+                results[model_id] = ppl
+                completed += 1
+                pending -= 1
+                
+                status = "✓" if success else "✗"
+                elapsed = time.time() - stage_start_time
+                ppl_str = f"{ppl:.2f}" if ppl != float('inf') else "N/A"
+                print(f"{status} [{completed}/{len(experiments)}] {model_id} completed (PPL: {ppl_str}, {pending} remaining, {elapsed/60:.1f}m elapsed)")
+            except Exception as e:
+                exp_config = future_to_exp[future]
+                model_id = exp_config.get("id", "unknown")
+                print(f"✗ [{completed}/{len(experiments)}] {model_id} raised exception: {e}")
+                results[model_id] = float('inf')
+                completed += 1
+                pending -= 1
+        
+        # Explicitly verify all futures completed (as_completed should have handled this, but double-check)
+        all_futures = list(future_to_exp.keys())
+        done_futures, not_done_futures = wait(all_futures, timeout=0, return_when=ALL_COMPLETED)
+        
+        if not_done_futures:
+            print(f"WARNING: {len(not_done_futures)} futures still pending, waiting for completion...")
+            for future in not_done_futures:
+                exp_config = future_to_exp[future]
+                model_id = exp_config.get("id", "unknown")
+                try:
+                    _, ppl, success = future.result(timeout=3600)  # 1 hour timeout per experiment
+                    results[model_id] = ppl
+                except Exception as e:
+                    print(f"✗ {model_id} failed with exception: {e}")
+                    results[model_id] = float('inf')
+        
+        print(f"\n✓ All {len(experiments)} experiments have completed.")
+    
+    # Verify all experiments completed
+    if len(results) != len(experiments):
+        print(f"WARNING: Expected {len(experiments)} results, got {len(results)}")
+        missing = set(exp["id"] for exp in experiments) - set(results.keys())
+        if missing:
+            print(f"Missing results for: {missing}")
+            for exp_id in missing:
+                results[exp_id] = float('inf')
     
     # Save results to cache
     cache = load_results_cache()
@@ -208,11 +256,15 @@ def run_stage_parallel(
     save_results_cache(cache)
     
     # Print summary
+    stage_elapsed = time.time() - stage_start_time
     successful = sum(1 for ppl in results.values() if ppl != float('inf'))
-    print(f"\nStage Summary: {successful}/{len(experiments)} successful")
+    print(f"\n{'='*60}")
+    print(f"Stage Complete: {successful}/{len(experiments)} successful")
+    print(f"Stage Duration: {stage_elapsed/60:.1f} minutes")
     if successful > 0:
         best_ppl = min(ppl for ppl in results.values() if ppl != float('inf'))
         print(f"Best PPL: {best_ppl:.2f}")
+    print(f"{'='*60}\n")
     
     return results
 
