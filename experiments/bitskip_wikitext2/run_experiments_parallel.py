@@ -30,33 +30,92 @@ os.makedirs(OUTPUT_BASE_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 # Global variables for cleanup
-_active_processes = []
 _executor = None
+_cleanup_called = False
 
 
 def cleanup_processes():
     """Cleanup all active processes on exit."""
-    global _active_processes, _executor
+    global _executor, _cleanup_called
     
-    if _active_processes:
-        print("\nCleaning up active processes...")
-        for process in _active_processes:
-            try:
-                if process.poll() is None:  # Process still running
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-            except Exception as e:
-                print(f"Error cleaning up process: {e}")
-        _active_processes.clear()
+    # Prevent double cleanup
+    if _cleanup_called:
+        return
+    _cleanup_called = True
     
+    print("\nCleaning up processes...")
+    
+    # Kill all Python processes running train.py (except current process)
+    current_pid = os.getpid()
+    killed_count = 0
+    
+    try:
+        # Try using pkill first (more reliable)
+        result = subprocess.run(
+            ["pkill", "-f", "train.py"],
+            timeout=5,
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL
+        )
+        if result.returncode == 0:
+            print("  Sent termination signal to training processes")
+            time.sleep(1)  # Give processes time to terminate
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        # Fallback: find and kill processes manually using pgrep
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", "train.py"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                for pid_str in result.stdout.strip().split('\n'):
+                    if pid_str.strip():
+                        try:
+                            pid = int(pid_str.strip())
+                            if pid != current_pid:
+                                # Try graceful termination first
+                                try:
+                                    os.kill(pid, signal.SIGTERM)
+                                    time.sleep(0.5)
+                                    # Check if still running, force kill if needed
+                                    try:
+                                        os.kill(pid, 0)  # Check if process exists
+                                        os.kill(pid, signal.SIGKILL)  # Force kill
+                                        killed_count += 1
+                                    except ProcessLookupError:
+                                        killed_count += 1  # Already terminated
+                                except ProcessLookupError:
+                                    pass  # Process already dead
+                                except PermissionError:
+                                    print(f"  Warning: No permission to kill process {pid}")
+                        except ValueError:
+                            pass
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+    
+    if killed_count > 0:
+        print(f"  Killed {killed_count} training process(es)")
+    
+    # Shutdown executor
     if _executor:
         try:
+            print("  Shutting down executor...")
             _executor.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
-            print(f"Error shutting down executor: {e}")
+            print(f"  Error shutting down executor: {e}")
+    
+    # Clear CUDA cache
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            print("  Cleared CUDA cache")
+    except Exception:
+        pass
+    
+    print("Cleanup complete.")
 
 
 def signal_handler(signum, frame):
