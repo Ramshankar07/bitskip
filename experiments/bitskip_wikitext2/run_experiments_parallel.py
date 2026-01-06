@@ -11,6 +11,8 @@ import time
 import re
 import argparse
 import sys
+import signal
+import atexit
 from concurrent.futures import ProcessPoolExecutor, as_completed, wait, ALL_COMPLETED
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -26,6 +28,48 @@ RESULTS_CACHE_FILE = os.path.join(OUTPUT_BASE_DIR, "results_cache.json")
 # Ensure output directories exist
 os.makedirs(OUTPUT_BASE_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
+
+# Global variables for cleanup
+_active_processes = []
+_executor = None
+
+
+def cleanup_processes():
+    """Cleanup all active processes on exit."""
+    global _active_processes, _executor
+    
+    if _active_processes:
+        print("\nCleaning up active processes...")
+        for process in _active_processes:
+            try:
+                if process.poll() is None:  # Process still running
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+            except Exception as e:
+                print(f"Error cleaning up process: {e}")
+        _active_processes.clear()
+    
+    if _executor:
+        try:
+            _executor.shutdown(wait=False, cancel_futures=True)
+        except Exception as e:
+            print(f"Error shutting down executor: {e}")
+
+
+def signal_handler(signum, frame):
+    """Handle interrupt signals (Ctrl+C)."""
+    print("\n\nInterrupt received. Cleaning up...")
+    cleanup_processes()
+    sys.exit(1)
+
+
+# Register signal handlers
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+atexit.register(cleanup_processes)
 
 
 def load_results_cache() -> Dict:
@@ -77,24 +121,35 @@ def parse_val_perplexity(model_id: str) -> float:
         return float('inf')
 
 
-def run_single_experiment(args_tuple: Tuple[Dict, bool]) -> Tuple[str, float, bool]:
+def get_available_gpus() -> List[int]:
+    """Get list of available GPU IDs."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--list-gpus"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            gpu_count = len(result.stdout.strip().split('\n'))
+            return list(range(gpu_count))
+    except Exception:
+        pass
+    return [0]  # Default to GPU 0 if nvidia-smi fails
+
+
+def run_single_experiment(args_tuple: Tuple[Dict, int, bool]) -> Tuple[str, float, bool]:
     """
     Run a single experiment and return results.
     Wrapped to work with ProcessPoolExecutor on Windows.
     
     Args:
-        args_tuple: (exp_config, compile_flag)
+        args_tuple: (exp_config, gpu_id, compile_flag)
     
     Returns:
         (model_id, perplexity, success)
     """
-    exp_config, compile_flag = args_tuple
-    """
-    Run a single experiment and return results.
-    
-    Returns:
-        (model_id, perplexity, success)
-    """
+    exp_config, gpu_id, compile_flag = args_tuple
     model_id = exp_config["id"]
     log_file = os.path.join(LOGS_DIR, f"{model_id}.log")
     
@@ -104,7 +159,10 @@ def run_single_experiment(args_tuple: Tuple[Dict, bool]) -> Tuple[str, float, bo
         print(f"✓ {model_id} already completed (PPL: {existing_ppl:.2f})")
         return (model_id, existing_ppl, True)
     
-    # Build command
+    # Build command with GPU assignment
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    
     cmd_parts = [BASE_CMD]
     cmd_parts.append(f"--model_id {model_id}")
     cmd_parts.append(f"--precision {exp_config['precision']}")
@@ -128,7 +186,7 @@ def run_single_experiment(args_tuple: Tuple[Dict, bool]) -> Tuple[str, float, bo
     cmd = " ".join(cmd_parts)
     
     # Run experiment
-    print(f"▶ Starting {model_id}...")
+    print(f"▶ Starting {model_id} on GPU {gpu_id}...")
     start_time = time.time()
     
     try:
@@ -138,7 +196,8 @@ def run_single_experiment(args_tuple: Tuple[Dict, bool]) -> Tuple[str, float, bo
                 shell=True, 
                 stdout=f, 
                 stderr=subprocess.STDOUT,
-                cwd=PROJECT_ROOT
+                cwd=PROJECT_ROOT,
+                env=env
             )
             process.wait()
         
@@ -153,7 +212,22 @@ def run_single_experiment(args_tuple: Tuple[Dict, bool]) -> Tuple[str, float, bo
                 print(f"✗ {model_id} completed but no results found")
                 return (model_id, float('inf'), False)
         else:
-            print(f"✗ {model_id} failed (check {log_file})")
+            # Check log file for OOM errors
+            oom_detected = False
+            try:
+                if os.path.exists(log_file):
+                    with open(log_file, 'r') as f:
+                        log_content = f.read()
+                        if "CUDA out of memory" in log_content or "OutOfMemoryError" in log_content:
+                            oom_detected = True
+            except Exception:
+                pass
+            
+            if oom_detected:
+                print(f"✗ {model_id} failed due to CUDA OOM (check {log_file})")
+                print(f"  Tip: Try reducing --max_workers or --max_gpu_workers, or reduce batch size in config")
+            else:
+                print(f"✗ {model_id} failed (check {log_file})")
             return (model_id, float('inf'), False)
             
     except Exception as e:
@@ -165,30 +239,65 @@ def run_stage_parallel(
     stage_name: str, 
     experiments: List[Dict], 
     max_workers: int = 4,
-    compile_flag: bool = False
+    compile_flag: bool = False,
+    max_gpu_workers: Optional[int] = None
 ) -> Dict[str, float]:
     """
     Run a stage's experiments in parallel and wait for all to complete.
     
+    Args:
+        stage_name: Name of the stage
+        experiments: List of experiment configurations
+        max_workers: Maximum number of parallel workers
+        compile_flag: Whether to compile models
+        max_gpu_workers: Maximum number of GPU workers (if None, uses max_workers)
+    
     Returns:
         Dictionary mapping model_id to perplexity
     """
+    global _executor
+    
     print(f"\n{'='*60}")
     print(f"Stage: {stage_name}")
     print(f"Experiments: {len(experiments)}")
     print(f"Max Workers: {max_workers}")
+    
+    # Get available GPUs and determine GPU worker limit
+    available_gpus = get_available_gpus()
+    if max_gpu_workers is None:
+        max_gpu_workers = min(max_workers, len(available_gpus))
+    else:
+        max_gpu_workers = min(max_gpu_workers, len(available_gpus))
+    
+    # Limit GPU assignments to max_gpu_workers (cycle through available GPUs)
+    gpus_to_use = available_gpus[:max_gpu_workers]
+    
+    print(f"Available GPUs: {len(available_gpus)}")
+    print(f"Using GPUs: {gpus_to_use}")
+    print(f"Max GPU Workers: {max_gpu_workers}")
+    
+    # Warn if max_workers exceeds GPU capacity
+    if max_workers > len(available_gpus) and max_gpu_workers < max_workers:
+        print(f"⚠ WARNING: max_workers ({max_workers}) > available GPUs ({len(available_gpus)})")
+        print(f"  Limiting concurrent GPU workers to {max_gpu_workers} to prevent OOM errors")
+        print(f"  Consider setting --max_gpu_workers={max_gpu_workers} or reducing --max_workers")
+    
     print(f"{'='*60}")
     
     results = {}
     stage_start_time = time.time()
     
+    # Create GPU assignment for each experiment (round-robin through limited GPUs)
+    gpu_assignments = [gpus_to_use[i % len(gpus_to_use)] for i in range(len(experiments))]
+    
     # Run experiments in parallel
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all experiments (wrap args for Windows compatibility)
-        future_to_exp = {
-            executor.submit(run_single_experiment, (exp, compile_flag)): exp 
-            for exp in experiments
-        }
+    _executor = ProcessPoolExecutor(max_workers=max_workers)
+    try:
+        # Submit all experiments with GPU assignments
+        future_to_exp = {}
+        for exp, gpu_id in zip(experiments, gpu_assignments):
+            future = _executor.submit(run_single_experiment, (exp, gpu_id, compile_flag))
+            future_to_exp[future] = exp
         
         # Collect results as they complete - as_completed() blocks until ALL futures are done
         completed = 0
@@ -235,6 +344,10 @@ def run_stage_parallel(
                     results[model_id] = float('inf')
         
         print(f"\n✓ All {len(experiments)} experiments have completed.")
+    finally:
+        # Cleanup executor
+        _executor.shutdown(wait=True)
+        _executor = None
     
     # Verify all experiments completed
     if len(results) != len(experiments):
@@ -346,6 +459,7 @@ def main():
     parser = argparse.ArgumentParser(description="BitSkip Parallel Experiments Runner")
     parser.add_argument("--stage", type=int, default=0, help="Run specific stage (1-6). 0 runs all.")
     parser.add_argument("--max_workers", type=int, default=4, help="Max parallel workers per stage")
+    parser.add_argument("--max_gpu_workers", type=int, default=None, help="Max concurrent GPU workers (default: min(max_workers, num_gpus))")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for all experiments")
     parser.add_argument("--dry_run", action="store_true", help="Print commands without running")
     args = parser.parse_args()
@@ -392,7 +506,7 @@ def main():
                 "early_exit": False
             })
         
-        run_stage_parallel("Exp 1: Baselines", exp1_configs, args.max_workers, args.compile)
+        run_stage_parallel("Exp 1: Baselines", exp1_configs, args.max_workers, args.compile, args.max_gpu_workers)
     
     # --- Stage 2: Lambda Ablation ---
     if args.stage == 0 or args.stage == 2:
@@ -408,7 +522,7 @@ def main():
                     "p_max": 0.5,
                     "schedule": "quadratic"
                 })
-        run_stage_parallel("Exp 2: Lambda Ablation", exp2_configs, args.max_workers, args.compile)
+        run_stage_parallel("Exp 2: Lambda Ablation", exp2_configs, args.max_workers, args.compile, args.max_gpu_workers)
     
     # Determine Best Lambda (Needed for Stage 3, 4, 5)
     best_lambda = LAMBDAS[3]  # Default 0.3
@@ -436,7 +550,8 @@ def main():
             f"Exp 3: P_max Ablation (Lambda={best_lambda})",
             exp3_configs,
             args.max_workers,
-            args.compile
+            args.compile,
+            args.max_gpu_workers
         )
     
     # Determine Best P_max (Needed for Stage 4, 5)
@@ -465,7 +580,8 @@ def main():
             f"Exp 4: Schedule Ablation (L={best_lambda}, P={best_p_max})",
             exp4_configs,
             args.max_workers,
-            args.compile
+            args.compile,
+            args.max_gpu_workers
         )
     
     # Determine Best Schedule
@@ -504,7 +620,8 @@ def main():
             f"Exp 5: Full Comparison (L={best_lambda}, P={best_p_max}, S={best_sched})",
             full_models_configs,
             args.max_workers,
-            args.compile
+            args.compile,
+            args.max_gpu_workers
         )
     
     # --- Stage 6: Hadamard Analysis ---
