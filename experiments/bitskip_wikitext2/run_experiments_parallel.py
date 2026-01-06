@@ -30,6 +30,53 @@ RESULTS_CACHE_FILE = os.path.join(OUTPUT_BASE_DIR, "results_cache.json")
 os.makedirs(OUTPUT_BASE_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 
+# Precision-aware batch sizes for optimal GPU utilization
+# Higher batch sizes for lower precision (less memory per param)
+# H200 (80GB): Can use much larger batches
+# RTX 3090 (24GB): More conservative
+PRECISION_BATCH_SIZES = {
+    # For H200 or high-VRAM GPUs (80GB+)
+    "h200": {
+        "fp16": 64,
+        "int8": 96,
+        "int4": 128,
+    },
+    # For RTX 3090 or similar (24GB)
+    "rtx3090": {
+        "fp16": 16,
+        "int8": 24,
+        "int4": 32,
+    },
+    # Default / conservative
+    "default": {
+        "fp16": 16,
+        "int8": 24,
+        "int4": 32,
+    }
+}
+
+# Corresponding gradient accumulation to maintain effective batch size
+PRECISION_GRAD_ACCUM = {
+    "h200": {
+        "fp16": 2,
+        "int8": 2,
+        "int4": 2,
+    },
+    "rtx3090": {
+        "fp16": 4,
+        "int8": 3,
+        "int4": 2,
+    },
+    "default": {
+        "fp16": 4,
+        "int8": 3,
+        "int4": 2,
+    }
+}
+
+# Global GPU profile (set via --gpu_profile argument)
+_gpu_profile = "default"
+
 # Global variables for cleanup
 _executor = None
 _cleanup_called = False
@@ -223,9 +270,18 @@ def run_single_experiment(args_tuple: Tuple[Dict, int, bool]) -> Tuple[str, floa
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     
+    # Get precision-aware batch size and gradient accumulation
+    precision = exp_config['precision'].lower()
+    batch_sizes = PRECISION_BATCH_SIZES.get(_gpu_profile, PRECISION_BATCH_SIZES["default"])
+    grad_accums = PRECISION_GRAD_ACCUM.get(_gpu_profile, PRECISION_GRAD_ACCUM["default"])
+    batch_size = batch_sizes.get(precision, 16)
+    grad_accum = grad_accums.get(precision, 4)
+    
     cmd_parts = [BASE_CMD]
     cmd_parts.append(f"--model_id {model_id}")
     cmd_parts.append(f"--precision {exp_config['precision']}")
+    cmd_parts.append(f"--batch_size {batch_size}")
+    cmd_parts.append(f"--gradient_accumulation_steps {grad_accum}")
     
     if compile_flag:
         cmd_parts.append("--compile")
@@ -246,7 +302,7 @@ def run_single_experiment(args_tuple: Tuple[Dict, int, bool]) -> Tuple[str, floa
     cmd = " ".join(cmd_parts)
     
     # Run experiment
-    print(f"▶ Starting {model_id} on GPU {gpu_id}...")
+    print(f">> Starting {model_id} on GPU {gpu_id} (batch={batch_size}, grad_accum={grad_accum})...")
     start_time = time.time()
     
     try:
@@ -561,13 +617,21 @@ def get_best_schedule_from_cache(schedules: List[str]) -> str:
 
 
 def main():
+    global _gpu_profile
+    
     parser = argparse.ArgumentParser(description="BitSkip Parallel Experiments Runner")
     parser.add_argument("--stage", type=int, default=0, help="Run specific stage (1-6). 0 runs all.")
     parser.add_argument("--max_workers", type=int, default=4, help="Max parallel workers per stage")
     parser.add_argument("--max_gpu_workers", type=int, default=None, help="Max concurrent GPU workers (default: min(max_workers, num_gpus))")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for all experiments")
     parser.add_argument("--dry_run", action="store_true", help="Print commands without running")
+    parser.add_argument("--gpu_profile", type=str, default="default", 
+                        choices=["h200", "rtx3090", "default"],
+                        help="GPU profile for precision-aware batch sizes (h200, rtx3090, default)")
     args = parser.parse_args()
+    
+    # Set global GPU profile for precision-aware batch sizes
+    _gpu_profile = args.gpu_profile
     
     # Define Search Spaces
     LAMBDAS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7]
@@ -580,6 +644,13 @@ def main():
     print(f"Results Cache: {RESULTS_CACHE_FILE}")
     print(f"Max Workers: {args.max_workers}")
     print(f"Compile: {args.compile}")
+    print(f"GPU Profile: {args.gpu_profile}")
+    
+    # Show precision-aware batch sizes
+    batch_sizes = PRECISION_BATCH_SIZES.get(args.gpu_profile, PRECISION_BATCH_SIZES["default"])
+    grad_accums = PRECISION_GRAD_ACCUM.get(args.gpu_profile, PRECISION_GRAD_ACCUM["default"])
+    print(f"Batch Sizes: FP16={batch_sizes['fp16']}, INT8={batch_sizes['int8']}, INT4={batch_sizes['int4']}")
+    print(f"Grad Accum:  FP16={grad_accums['fp16']}, INT8={grad_accums['int8']}, INT4={grad_accums['int4']}")
     print(f"{'='*60}\n")
     
     if args.dry_run:
@@ -588,6 +659,7 @@ def main():
         print("Would run experiments in parallel with the following configuration:")
         print(f"  Max Workers: {args.max_workers}")
         print(f"  Compile: {args.compile}")
+        print(f"  GPU Profile: {args.gpu_profile}")
         print(f"  Stages: {args.stage if args.stage > 0 else 'All (1-6)'}")
         return
     
