@@ -345,12 +345,18 @@ def main():
         logger.info(f"Training stopped early at step {global_step} (best PPL: {best_val_ppl:.2f})")
     
     # Write results to file
-    with open(os.path.join(run_dir, "results.txt"), "w") as f:
-        f.write(f"Validation Perplexity: {perplexity:.2f}\n")
-        if early_stopped:
-            f.write(f"Early Stopped: True\n")
-            f.write(f"Final Step: {global_step}\n")
-            f.write(f"Best Validation PPL: {best_val_ppl:.2f}\n")
+    try:
+        results_file = os.path.join(run_dir, "results.txt")
+        with open(results_file, "w") as f:
+            f.write(f"Validation Perplexity: {perplexity:.2f}\n")
+            if early_stopped:
+                f.write(f"Early Stopped: True\n")
+                f.write(f"Final Step: {global_step}\n")
+                f.write(f"Best Validation PPL: {best_val_ppl:.2f}\n")
+        logger.info(f"Results written to {results_file}")
+    except Exception as e:
+        logger.error(f"Failed to write results file: {e}")
+        raise
 
 if __name__ == "__main__":
     main()

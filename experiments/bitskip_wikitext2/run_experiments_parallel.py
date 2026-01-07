@@ -269,6 +269,8 @@ def run_single_experiment(args_tuple: Tuple[Dict, int, bool]) -> Tuple[str, floa
     # Build command with GPU assignment
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    # Fix OpenMP library conflict on macOS (common with multiprocessing)
+    env["KMP_DUPLICATE_LIB_OK"] = "TRUE"
     
     # Get precision-aware batch size and gradient accumulation
     precision = exp_config['precision'].lower()
@@ -282,6 +284,7 @@ def run_single_experiment(args_tuple: Tuple[Dict, int, bool]) -> Tuple[str, floa
     cmd_parts.append(f"--precision {exp_config['precision']}")
     cmd_parts.append(f"--batch_size {batch_size}")
     cmd_parts.append(f"--gradient_accumulation_steps {grad_accum}")
+    cmd_parts.append(f"--output_dir {OUTPUT_BASE_DIR}")
     
     if compile_flag:
         cmd_parts.append("--compile")
