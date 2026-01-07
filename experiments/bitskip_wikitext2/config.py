@@ -27,12 +27,12 @@ class ExperimentConfig:
     batch_size: int = 16
     gradient_accumulation_steps: int = 4
     learning_rate: float = 6e-4
-    num_steps: int = 1000
-    warmup_steps: int = 100
+    num_steps: int = 100
+    warmup_steps: int = 10
     seed: int = 42
     
     # Early Stopping
-    eval_every_steps: int = 250  # Evaluate validation every N steps
+    eval_every_steps: int = 25  # Evaluate validation every N steps
     patience: int = 3  # Stop after N evaluations without improvement
     min_delta: float = 0.01  # Minimum improvement threshold for validation perplexity
     
