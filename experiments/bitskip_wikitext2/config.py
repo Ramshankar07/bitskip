@@ -32,8 +32,8 @@ class ExperimentConfig:
     seed: int = 42
     
     # Early Stopping
-    eval_every_steps: int = 2000  # Evaluate validation every N steps
-    patience: int = 5  # Stop after N evaluations without improvement
+    eval_every_steps: int = 250  # Evaluate validation every N steps
+    patience: int = 3  # Stop after N evaluations without improvement
     min_delta: float = 0.01  # Minimum improvement threshold for validation perplexity
     
     def __post_init__(self):
