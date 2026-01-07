@@ -27,8 +27,8 @@ class ExperimentConfig:
     batch_size: int = 16
     gradient_accumulation_steps: int = 4
     learning_rate: float = 6e-4
-    num_steps: int = 10000
-    warmup_steps: int = 1000
+    num_steps: int = 1000
+    warmup_steps: int = 100
     seed: int = 42
     
     # Early Stopping
