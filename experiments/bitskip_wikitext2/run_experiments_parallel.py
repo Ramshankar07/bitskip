@@ -58,9 +58,9 @@ PRECISION_BATCH_SIZES = {
 # Corresponding gradient accumulation to maintain effective batch size
 PRECISION_GRAD_ACCUM = {
     "h200": {
-        "fp16": 2,
-        "int8": 2,
-        "int4": 2,
+        "fp16": 1,
+        "int8": 1,
+        "int4": 1,
     },
     "rtx3090": {
         "fp16": 4,
