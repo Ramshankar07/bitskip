@@ -12,13 +12,6 @@ This directory contains experiments to investigate the interaction between quant
 
 ## Experiments
 
-1. **Baselines**: FP16, INT8, INT4 (w/ and w/o Hadamard) - No Early Exit.
-2. **Early Exit Loss Weight (λ)**: Ablation of λ [0.0 - 0.7].
-3. **Dropout Probability (p_max)**: Ablation of p_max [0.0 - 0.7].
-4. **Dropout Schedule**: Quadratic vs Linear vs Uniform.
-5. **Full Comparison**: Best combos of the above.
-6. **Hadamard Analysis**: Analysis of Hadamard transform effects.
-
 ## Usage
 
 To run all experiments:
