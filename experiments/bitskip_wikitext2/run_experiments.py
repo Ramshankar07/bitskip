@@ -11,7 +11,7 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
 # Use sys.executable to ensure child processes use the same environment
-BASE_CMD = f"{sys.executable} {os.path.join(SCRIPT_DIR, 'train.py')}"
+BASE_CMD = f"{sys.executable} {os.path.join(SCRIPT_DIR, 'train.py')} --num_steps 50 --eval_every_steps 10"
 OUTPUT_BASE_DIR = os.path.join(PROJECT_ROOT, "results")
 LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 
@@ -184,10 +184,10 @@ def main():
         generate_slurm_scripts()
         return
 
-    # Define Search Spaces
-    LAMBDAS = [0.0, 0.1, 0.2, 0.3, 0.5, 0.7]
-    P_MAXS = [0.0, 0.3, 0.5, 0.7]
-    SCHEDULES = ["quadratic", "linear", "uniform"]
+    # Define Search Spaces (Reduced for faster profiling)
+    LAMBDAS = [0.0, 0.3, 0.7]
+    P_MAXS = [0.0, 0.5]
+    SCHEDULES = ["quadratic", "linear"]
     
     # --- Experiment 1: Baselines ---
     if args.stage == 0 or args.stage == 1:
@@ -272,7 +272,7 @@ def main():
     # --- Experiment 5: Full Comparison ---
     if args.stage == 0 or args.stage == 5:
         full_models_configs = []
-        seeds = [42, 123, 456]
+        seeds = [42]
         base_models = [
             {"name": "F1", "precision": "fp16", "hadamard": False},
             {"name": "F2", "precision": "int8", "hadamard": False},
