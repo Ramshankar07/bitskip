@@ -1,4 +1,5 @@
 import os
+import math
 from typing import Optional
 
 import torch
@@ -34,6 +35,7 @@ def fwht(x: torch.Tensor) -> torch.Tensor:
     """
     Fast Walsh–Hadamard Transform along the last dimension (power-of-two length).
     Uses CUDA kernel when available, falls back to PyTorch implementation otherwise.
+    Includes 1/sqrt(n) scaling for orthogonality.
     """
     if x.dim() == 0:
         return x
@@ -41,23 +43,25 @@ def fwht(x: torch.Tensor) -> torch.Tensor:
     if (n & (n - 1)) != 0:
         raise ValueError(f"FWHT requires power-of-two length, got {n}")
 
+    # Calculate scaling factor
+    scaling = 1.0 / math.sqrt(n)
+
     ext = _load_extension()
     if ext is not None and x.is_cuda:
-        return ext.fwht(x)
+        return ext.fwht(x) * scaling
 
     # CPU/PyTorch fallback (iterative butterfly on last dim)
-    y = x.contiguous().view(-1, n)
+    y = x.detach().clone().contiguous().view(-1, n)
     h = 1
     while h < n:
         # Perform butterflies for blocks of size 2h
         for start in range(0, n, 2 * h):
-            a = y[:, start:start + h]
-            b = y[:, start + h:start + 2 * h]
-            sum_ab = a + b
-            diff_ab = a - b
-            y[:, start:start + h] = sum_ab
-            y[:, start + h:start + 2 * h] = diff_ab
+            a = y[:, start:start + h].clone()
+            b = y[:, start + h:start + 2 * h].clone()
+            y[:, start:start + h] = a + b
+            y[:, start + h:start + 2 * h] = a - b
         h <<= 1
-    return y.view(x.shape)
+    
+    return (y.view(x.shape) * scaling).to(x.dtype)
 
 

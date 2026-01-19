@@ -51,6 +51,8 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size per device")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4, help="Gradient accumulation steps")
     parser.add_argument("--learning_rate", type=float, default=6e-4, help="Learning rate")
+    parser.add_argument("--num_steps", type=int, default=None, help="Number of training steps")
+    parser.add_argument("--eval_every_steps", type=int, default=None, help="Evaluation frequency")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile to speed up training")
     
     return parser.parse_args()
@@ -147,6 +149,10 @@ def main():
     config.gradient_accumulation_steps = args.gradient_accumulation_steps
     config.learning_rate = args.learning_rate
     config.seed = args.seed
+    if args.num_steps is not None:
+        config.num_steps = args.num_steps
+    if args.eval_every_steps is not None:
+        config.eval_every_steps = args.eval_every_steps
     
     # Create Output Directory
     run_dir = os.path.join(args.output_dir, args.model_id)

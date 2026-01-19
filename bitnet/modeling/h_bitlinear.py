@@ -112,19 +112,19 @@ class HBitLinear(nn.Module):
             bits = 4  # Default for H-BitLinear
             
         # Calculate scaling factor with improved numerical stability
-        scale = x.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-6, max=1e6)
+        scale = x.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-5, max=1e5)
         
         # Scale to target bit range with bounds checking
         max_val = (1 << (bits - 1)) - 1
         scale_factor = max_val / scale
         
         # Clamp scale factor to prevent extreme values
-        scale_factor = scale_factor.clamp(min=1e-6, max=1e6)
+        scale_factor = scale_factor.clamp(min=1e-5, max=1e5)
         
         x_scaled = (x * scale_factor).round().clamp(-max_val, max_val)
         
         # Return quantized values and scale for dequantization
-        return x_scaled, scale
+        return x_scaled, scale.clamp(min=1e-5)
 
     
 
@@ -151,24 +151,24 @@ class HBitLinear(nn.Module):
 
         # Activation fake-quant (per-token) with STE
         bits = self.activation_bits
-        x_scale = x_ln.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-6)
-        max_val = (1 << (bits - 1)) - 1
+        x_scale = x_ln.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-5, max=1e5)
+        max_val = float((1 << (bits - 1)) - 1)
         x_int = (x_ln * max_val / x_scale).round().clamp(-max_val, max_val)
         x_q = x_int * x_scale / max_val
         if bool(self.training):
-            x_q = x_ln - x_ln.detach() + x_q.detach()
+            x_q = x_ln + (x_q - x_ln).detach()
 
         # Hadamard transform on fake-quant activations (now power of 2)
         x_h = hadamard_transform(x_q)
 
         # Weight fake-quant (ternary) with STE
-        w_scale = self.weight.abs().mean().clamp(min=1e-6)
+        w_scale = self.weight.abs().mean().clamp(min=1e-5, max=1e5)
         w_q = torch.zeros_like(self.weight)
         w_q[self.weight > 0.5 * w_scale] = 1.0
         w_q[self.weight < -0.5 * w_scale] = -1.0
         w_q = w_q * w_scale
         if bool(self.training):
-            w_q = self.weight - self.weight.detach() + w_q.detach()
+            w_q = self.weight + (w_q - self.weight).detach()
 
         # Linear on flattened last-dim, then reshape
         x_h_flat = x_h.view(-1, x_h.shape[-1])
