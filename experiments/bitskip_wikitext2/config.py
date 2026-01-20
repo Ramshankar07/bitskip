@@ -24,7 +24,7 @@ class ExperimentConfig:
     dropout_schedule: str = "quadratic" # quadratic, linear, uniform
     
     # Training
-    batch_size: int = 16
+    batch_size: int = 8
     gradient_accumulation_steps: int = 4
     learning_rate: float = 6e-4
     num_steps: int = 100

@@ -155,8 +155,10 @@ def main():
         config.eval_every_steps = args.eval_every_steps
     
     # Create Output Directory
-    run_dir = os.path.join(args.output_dir, args.model_id)
+    abs_output_dir = os.path.abspath(args.output_dir)
+    run_dir = os.path.join(abs_output_dir, args.model_id)
     os.makedirs(run_dir, exist_ok=True)
+    logger.info(f"Using output directory: {run_dir}")
     
     # Initialize Tokenizer (GPT-2)
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -167,7 +169,13 @@ def main():
     
     # Initialize Model
     model = create_model(config)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    logger.info(f"Using device: {device}")
     model.to(device)
     
     if args.compile:
@@ -205,10 +213,13 @@ def main():
     pbar = tqdm(total=num_training_steps, desc=f"Training {args.model_id}", unit="step")
     pbar.set_postfix({"loss": "N/A", "val_ppl": "N/A"})
     
-    while global_step < num_training_steps:
-        for batch in train_loader:
-            if global_step >= num_training_steps:
-                break
+    # Progress bar initialization already done above
+    
+    try:
+        while global_step < num_training_steps:
+            for batch in train_loader:
+                if global_step >= num_training_steps:
+                    break
                 
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
@@ -250,9 +261,6 @@ def main():
                 # Update progress bar
                 current_loss = loss.item() * config.gradient_accumulation_steps
                 pbar.set_postfix({"loss": f"{current_loss:.4f}", "val_ppl": f"{best_val_ppl:.2f}" if best_val_ppl != float('inf') else "N/A"})
-                
-                if (global_step + 1) % 100 == 0:
-                    logger.info(f"Step {global_step+1}/{num_training_steps} | Loss: {current_loss:.4f}")
             
             global_step += 1
             pbar.update(1)
@@ -282,22 +290,31 @@ def main():
                 
                 logger.info(f"Validation at step {global_step}: PPL={val_ppl:.2f}, Best={best_val_ppl:.2f}")
                 
+                # Periodically save results even if not the best
+                results_file = os.path.join(run_dir, "results.txt")
+                with open(results_file, "w") as f:
+                    f.write(f"Validation Perplexity: {val_ppl:.2f}\n")
+                    f.write(f"Last Step: {global_step}\n")
+                    if best_val_ppl != float('inf'):
+                        f.write(f"Best Validation PPL: {best_val_ppl:.2f}\n")
+
                 # Check for improvement
                 if val_ppl < best_val_ppl - config.min_delta:
                     best_val_ppl = val_ppl
                     patience_counter = 0
                     best_model_state = model.state_dict().copy()
-                    logger.info(f"New best validation PPL: {best_val_ppl:.2f} (improvement: {best_val_ppl:.2f})")
+                    logger.info(f"New best validation PPL: {best_val_ppl:.2f}")
+                    # Save best model
+                    save_file(best_model_state, os.path.join(run_dir, "model.safetensors"))
                 else:
                     patience_counter += 1
                     logger.info(f"No improvement. Patience: {patience_counter}/{config.patience}")
                     
                     if patience_counter >= config.patience:
-                        logger.info(f"Early stopping triggered at step {global_step} (no improvement for {config.patience} evaluations)")
+                        logger.info(f"Early stopping triggered at step {global_step}")
                         early_stopped = True
                         if best_model_state is not None:
                             model.load_state_dict(best_model_state)
-                            logger.info("Loaded best model state")
                         break
                 
                 model.train()
@@ -305,10 +322,27 @@ def main():
             if early_stopped:
                 break
         
-        if early_stopped:
-            break
-    
-    pbar.close()
+            if early_stopped:
+                break
+    except KeyboardInterrupt:
+        logger.info("Training interrupted by user. Saving current progress...")
+    except Exception as e:
+        logger.error(f"Training failed with error: {e}")
+        raise e
+    finally:
+        pbar.close()
+        # Initial results save (in case of crash/interrupt)
+        final_ppl = best_val_ppl if best_val_ppl != float('inf') else 0.0
+        temp_results_file = os.path.join(run_dir, "results.txt")
+        try:
+            with open(temp_results_file, "w") as f:
+                f.write(f"Validation Perplexity: {final_ppl:.2f}\n")
+                f.write(f"Final Step: {global_step}\n")
+                if early_stopped:
+                    f.write("Early Stopped: True\n")
+            logger.info(f"Preliminary results written to {os.path.abspath(temp_results_file)}")
+        except Exception as e:
+            logger.error(f"Failed to write preliminary results: {e}")
     
     # Load best model if early stopping occurred and we have a saved state
     if early_stopped and best_model_state is not None:
@@ -350,16 +384,23 @@ def main():
     if early_stopped:
         logger.info(f"Training stopped early at step {global_step} (best PPL: {best_val_ppl:.2f})")
     
-    # Write results to file
+    # Final results save
     try:
-        results_file = os.path.join(run_dir, "results.txt")
-        with open(results_file, "w") as f:
+        final_results_file = os.path.join(run_dir, "results.txt")
+        with open(final_results_file, "w") as f:
             f.write(f"Validation Perplexity: {perplexity:.2f}\n")
             if early_stopped:
-                f.write(f"Early Stopped: True\n")
-                f.write(f"Final Step: {global_step}\n")
-                f.write(f"Best Validation PPL: {best_val_ppl:.2f}\n")
-        logger.info(f"Results written to {results_file}")
+                f.write("Early Stopped: True\n")
+            f.write(f"Final Step: {global_step}\n")
+            f.write(f"Best Validation PPL: {best_val_ppl:.2f}\n")
+        
+        # Verify file exists
+        if os.path.exists(final_results_file):
+            logger.info(f"Final results successfully written to {os.path.abspath(final_results_file)}")
+            logger.info(f"File size: {os.path.getsize(final_results_file)} bytes")
+        else:
+            logger.error(f"File {final_results_file} DOES NOT EXIST after write operation!")
+            
     except Exception as e:
         logger.error(f"Failed to write results file: {e}")
         raise

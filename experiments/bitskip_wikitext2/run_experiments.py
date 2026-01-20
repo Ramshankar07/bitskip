@@ -173,135 +173,55 @@ echo "Current directory: $(pwd)"
         os.chmod(filepath, 0o755)
 
 def main():
-    parser = argparse.ArgumentParser(description="BitSkip Experiments Runner")
-    parser.add_argument("--stage", type=int, default=0, help="Run specific stage (1-6). 0 runs all.")
-    parser.add_argument("--generate_slurm", action="store_true", help="Generate Slurm batch scripts")
+    parser = argparse.ArgumentParser(description="BitSkip Minimal Evaluation Runner")
     parser.add_argument("--dry_run", action="store_true", help="Print commands without running")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for all experiments")
     args = parser.parse_args()
     
-    if args.generate_slurm:
-        generate_slurm_scripts()
-        return
+    print("\n" + "="*60)
+    print("BitSkip Minimal Evaluation Suite")
+    print("="*60)
+    print(f"Output Directory: {os.path.abspath(OUTPUT_BASE_DIR)}")
+    print(f"Logs Directory:   {os.path.abspath(LOGS_DIR)}")
+    print("="*60 + "\n")
 
-    # Define Search Spaces (Reduced for faster profiling)
-    LAMBDAS = [0.0, 0.3, 0.7]
-    P_MAXS = [0.0, 0.5]
-    SCHEDULES = ["quadratic", "linear"]
+    # Optimal parameters identified in research
+    GOLDEN_LAMBDA = 0.3
+    GOLDEN_P_MAX = 0.5
+    GOLDEN_SCHEDULE = "quadratic"
+
+    # Define minimal set of experiments
+    minimal_configs = [
+        # --- Baselines ---
+        {
+            "id": "Baseline_FP16",
+            "precision": "fp16",
+            "hadamard": False,
+            "early_exit": False
+        },
+        {
+            "id": "Baseline_INT8",
+            "precision": "int8",
+            "hadamard": False,
+            "early_exit": False
+        },
+        # --- The "Best" BitSkip Setup ---
+        {
+            "id": "BitSkip_Golden_INT8_H",
+            "precision": "int8",
+            "hadamard": True,
+            "early_exit": True,
+            "lambda": GOLDEN_LAMBDA,
+            "p_max": GOLDEN_P_MAX,
+            "schedule": GOLDEN_SCHEDULE
+        }
+    ]
     
-    # --- Experiment 1: Baselines ---
-    if args.stage == 0 or args.stage == 1:
-        exp1_configs = []
-        for prec in ["fp16", "int8", "int4"]:
-             exp1_configs.append({"id": f"B_Base_{prec.upper()}", "precision": prec, "hadamard": False, "early_exit": False})
-        for prec in ["int8", "int4"]:
-             exp1_configs.append({"id": f"B_H_Base_{prec.upper()}", "precision": prec, "hadamard": True, "early_exit": False})
-             
-        run_experiment_stage("Exp 1: Baselines", exp1_configs, dry_run=args.dry_run, compile=args.compile)
+    run_experiment_stage("Minimal Evaluation", minimal_configs, dry_run=args.dry_run, compile=args.compile)
     
-    # --- Experiment 2: Lambda Ablation ---
-    if args.stage == 0 or args.stage == 2:
-        exp2_configs = []
-        for lam in LAMBDAS:
-            for prec in ["fp16", "int8"]:
-                exp2_configs.append({
-                    "id": f"Exp2_L{lam}_{prec.upper()}", 
-                    "precision": prec, "hadamard": False, "early_exit": True,
-                    "lambda": lam, "p_max": 0.5, "schedule": "quadratic"
-                })
-        run_experiment_stage("Exp 2: Lambda Ablation", exp2_configs, dry_run=args.dry_run, compile=args.compile)
-    
-    # Determine Best Lambda (Needed for Stage 3, 4, 5)
-    # We always need to calculate this if we are running later stages
-    best_lambda = LAMBDAS[3] # Default 0.3
-    if args.stage == 0 or args.stage >= 3:
-        if not args.dry_run:
-            best_lambda = get_best_param({}, "Lambda", LAMBDAS, "Exp2_L{val}")
-            
-    # --- Experiment 3: P_max Ablation ---
-    if args.stage == 0 or args.stage == 3:
-        exp3_configs = []
-        for p in P_MAXS:
-            for prec in ["fp16", "int8"]:
-                 exp3_configs.append({
-                    "id": f"Exp3_P{p}_{prec.upper()}", 
-                    "precision": prec, "hadamard": False, "early_exit": True,
-                    "lambda": best_lambda, "p_max": p, "schedule": "quadratic"
-                })
-        run_experiment_stage(f"Exp 3: P_max Ablation (Lambda={best_lambda})", exp3_configs, dry_run=args.dry_run, compile=args.compile)
-        
-    # Determine Best P_max (Needed for Stage 4, 5)
-    best_p_max = P_MAXS[2] # Default 0.5
-    if args.stage == 0 or args.stage >= 4:
-        if not args.dry_run:
-            best_p_max = get_best_param({}, "P_max", P_MAXS, "Exp3_P{val}")
-
-    # --- Experiment 4: Schedule Ablation ---
-    if args.stage == 0 or args.stage == 4:
-        exp4_configs = []
-        for sched in SCHEDULES:
-             for prec in ["fp16", "int8"]:
-                exp4_configs.append({
-                    "id": f"Exp4_S{sched}_{prec.upper()}", 
-                    "precision": prec, "hadamard": False, "early_exit": True,
-                    "lambda": best_lambda, "p_max": best_p_max, "schedule": sched
-                })
-        run_experiment_stage(f"Exp 4: Schedule Ablation (L={best_lambda}, P={best_p_max})", exp4_configs, dry_run=args.dry_run, compile=args.compile)
-
-    # Determine Best Schedule
-    best_sched = SCHEDULES[0] # Default quadratic
-    if args.stage == 0 or args.stage >= 5:
-        if not args.dry_run:
-             # Custom polling for schedules
-            avg_ppls = {}
-            for sched in SCHEDULES:
-                ppls = []
-                for prec in ["FP16", "INT8"]:
-                     run_id = f"Exp4_S{sched}_{prec}"
-                     ppl = parse_val_perplexity(run_id)
-                     if ppl != float('inf'): ppls.append(ppl)
-                if ppls: avg_ppls[sched] = sum(ppls) / len(ppls)
-                else: avg_ppls[sched] = float('inf')
-            
-            if any(v != float('inf') for v in avg_ppls.values()):
-                best_sched = min(avg_ppls, key=avg_ppls.get)
-                print(f"Best Schedule: {best_sched} (Avg PPL: {avg_ppls[best_sched]:.2f})")
-            else:
-                 print("Warning: Could not determine best schedule. Using default.")
-
-    # --- Experiment 5: Full Comparison ---
-    if args.stage == 0 or args.stage == 5:
-        full_models_configs = []
-        seeds = [42]
-        base_models = [
-            {"name": "F1", "precision": "fp16", "hadamard": False},
-            {"name": "F2", "precision": "int8", "hadamard": False},
-            {"name": "F3", "precision": "int4", "hadamard": False},
-            {"name": "F4", "precision": "int8", "hadamard": True},
-            {"name": "F5", "precision": "int4", "hadamard": True},
-        ]
-        
-        for fm in base_models:
-            for seed in seeds:
-                full_models_configs.append({
-                    "id": f"{fm['name']}_S{seed}", 
-                    "precision": fm['precision'], 
-                    "hadamard": fm['hadamard'], 
-                    "early_exit": True,
-                    "lambda": best_lambda, 
-                    "p_max": best_p_max, 
-                    "schedule": best_sched,
-                    "seed": seed
-                })
-        run_experiment_stage(f"Exp 5: Full Comparison (L={best_lambda}, P={best_p_max}, S={best_sched})", full_models_configs, dry_run=args.dry_run, compile=args.compile)
-        
-    # --- Experiment 6: Hadamard Analysis ---
-    if args.stage == 0 or args.stage == 6:
-        print("\n--- Starting Stage: Exp 6: Hadamard Analysis ---")
-        print("Analysis task reusing models from Exp 5.")
-        print("Please run custom analysis scripts on the generated checkpoints.")
-        # This stage might just be a placeholder or run specific analysis scripts
-        # For now, we'll leave it as a placeholder or you can add analysis calls here
+    print("\n" + "="*60)
+    print("Evaluation Suite Finished")
+    print("="*60)
 
 if __name__ == "__main__":
     main()

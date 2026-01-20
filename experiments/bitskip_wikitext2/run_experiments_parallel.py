@@ -622,8 +622,7 @@ def get_best_schedule_from_cache(schedules: List[str]) -> str:
 def main():
     global _gpu_profile
     
-    parser = argparse.ArgumentParser(description="BitSkip Parallel Experiments Runner")
-    parser.add_argument("--stage", type=int, default=0, help="Run specific stage (1-6). 0 runs all.")
+    parser = argparse.ArgumentParser(description="BitSkip Minimal Parallel Evaluation Runner")
     parser.add_argument("--max_workers", type=int, default=4, help="Max parallel workers per stage")
     parser.add_argument("--max_gpu_workers", type=int, default=None, help="Max concurrent GPU workers (default: min(max_workers, num_gpus))")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for all experiments")
@@ -636,13 +635,13 @@ def main():
     # Set global GPU profile for precision-aware batch sizes
     _gpu_profile = args.gpu_profile
     
-    # Define Search Spaces (Reduced for faster profiling)
-    LAMBDAS = [0.0, 0.3, 0.7]
-    P_MAXS = [0.0, 0.5]
-    SCHEDULES = ["quadratic", "linear"]
-    
+    # Optimal parameters identified in research
+    GOLDEN_LAMBDA = 0.3
+    GOLDEN_P_MAX = 0.5
+    GOLDEN_SCHEDULE = "quadratic"
+
     print(f"\n{'='*60}")
-    print("BitSkip Parallel Experiment Runner")
+    print("BitSkip Minimal Parallel Evaluation Suite")
     print(f"{'='*60}")
     print(f"Results Cache: {RESULTS_CACHE_FILE}")
     print(f"Max Workers: {args.max_workers}")
@@ -658,173 +657,44 @@ def main():
     
     if args.dry_run:
         print("DRY RUN MODE - Showing what would be executed\n")
-        # Still show the structure but don't execute
-        print("Would run experiments in parallel with the following configuration:")
-        print(f"  Max Workers: {args.max_workers}")
-        print(f"  Compile: {args.compile}")
-        print(f"  GPU Profile: {args.gpu_profile}")
-        print(f"  Stages: {args.stage if args.stage > 0 else 'All (1-6)'}")
         return
     
     start_time = time.time()
     
-    # --- Stage 1: Baselines ---
-    if args.stage == 0 or args.stage == 1:
-        exp1_configs = []
-        for prec in ["fp16", "int8", "int4"]:
-            exp1_configs.append({
-                "id": f"B_Base_{prec.upper()}",
-                "precision": prec,
-                "hadamard": False,
-                "early_exit": False
-            })
-        for prec in ["int8", "int4"]:
-            exp1_configs.append({
-                "id": f"B_H_Base_{prec.upper()}",
-                "precision": prec,
-                "hadamard": True,
-                "early_exit": False
-            })
-        
-        run_stage_parallel("Exp 1: Baselines", exp1_configs, args.max_workers, args.compile, args.max_gpu_workers)
+    # Define minimal set of experiments
+    minimal_configs = [
+        # --- Baselines ---
+        {
+            "id": "Baseline_FP16",
+            "precision": "fp16",
+            "hadamard": False,
+            "early_exit": False
+        },
+        {
+            "id": "Baseline_INT8",
+            "precision": "int8",
+            "hadamard": False,
+            "early_exit": False
+        },
+        # --- The "Best" BitSkip Setup ---
+        {
+            "id": "BitSkip_Golden_INT8_H",
+            "precision": "int8",
+            "hadamard": True,
+            "early_exit": True,
+            "lambda": GOLDEN_LAMBDA,
+            "p_max": GOLDEN_P_MAX,
+            "schedule": GOLDEN_SCHEDULE
+        }
+    ]
     
-    # --- Stage 2: Lambda Ablation ---
-    if args.stage == 0 or args.stage == 2:
-        exp2_configs = []
-        for lam in LAMBDAS:
-            for prec in ["fp16", "int8"]:
-                exp2_configs.append({
-                    "id": f"Exp2_L{lam}_{prec.upper()}",
-                    "precision": prec,
-                    "hadamard": False,
-                    "early_exit": True,
-                    "lambda": lam,
-                    "p_max": 0.5,
-                    "schedule": "quadratic"
-                })
-        run_stage_parallel("Exp 2: Lambda Ablation", exp2_configs, args.max_workers, args.compile, args.max_gpu_workers)
+    run_stage_parallel("Minimal Evaluation", minimal_configs, args.max_workers, args.compile, args.max_gpu_workers)
     
-    # Determine Best Lambda (Needed for Stage 3, 4, 5)
-    best_lambda = LAMBDAS[3]  # Default 0.3
-    if args.stage == 0 or args.stage >= 3:
-        print("\n" + "="*60)
-        print("Determining Best Lambda from Stage 2 results...")
-        print("="*60)
-        best_lambda = get_best_param_from_cache("Lambda", LAMBDAS, "Exp2_L{val}")
-    
-    # --- Stage 3: P_max Ablation ---
-    if args.stage == 0 or args.stage == 3:
-        exp3_configs = []
-        for p in P_MAXS:
-            for prec in ["fp16", "int8"]:
-                exp3_configs.append({
-                    "id": f"Exp3_P{p}_{prec.upper()}",
-                    "precision": prec,
-                    "hadamard": False,
-                    "early_exit": True,
-                    "lambda": best_lambda,
-                    "p_max": p,
-                    "schedule": "quadratic"
-                })
-        run_stage_parallel(
-            f"Exp 3: P_max Ablation (Lambda={best_lambda})",
-            exp3_configs,
-            args.max_workers,
-            args.compile,
-            args.max_gpu_workers
-        )
-    
-    # Determine Best P_max (Needed for Stage 4, 5)
-    best_p_max = P_MAXS[2]  # Default 0.5
-    if args.stage == 0 or args.stage >= 4:
-        print("\n" + "="*60)
-        print("Determining Best P_max from Stage 3 results...")
-        print("="*60)
-        best_p_max = get_best_param_from_cache("P_max", P_MAXS, "Exp3_P{val}")
-    
-    # --- Stage 4: Schedule Ablation ---
-    if args.stage == 0 or args.stage == 4:
-        exp4_configs = []
-        for sched in SCHEDULES:
-            for prec in ["fp16", "int8"]:
-                exp4_configs.append({
-                    "id": f"Exp4_S{sched}_{prec.upper()}",
-                    "precision": prec,
-                    "hadamard": False,
-                    "early_exit": True,
-                    "lambda": best_lambda,
-                    "p_max": best_p_max,
-                    "schedule": sched
-                })
-        run_stage_parallel(
-            f"Exp 4: Schedule Ablation (L={best_lambda}, P={best_p_max})",
-            exp4_configs,
-            args.max_workers,
-            args.compile,
-            args.max_gpu_workers
-        )
-    
-    # Determine Best Schedule
-    best_sched = SCHEDULES[0]  # Default quadratic
-    if args.stage == 0 or args.stage >= 5:
-        print("\n" + "="*60)
-        print("Determining Best Schedule from Stage 4 results...")
-        print("="*60)
-        best_sched = get_best_schedule_from_cache(SCHEDULES)
-    
-    # --- Stage 5: Full Comparison ---
-    if args.stage == 0 or args.stage == 5:
-        full_models_configs = []
-        seeds = [42]
-        base_models = [
-            {"name": "F1", "precision": "fp16", "hadamard": False},
-            {"name": "F2", "precision": "int8", "hadamard": False},
-            {"name": "F3", "precision": "int4", "hadamard": False},
-            {"name": "F4", "precision": "int8", "hadamard": True},
-            {"name": "F5", "precision": "int4", "hadamard": True},
-        ]
-        
-        for fm in base_models:
-            for seed in seeds:
-                full_models_configs.append({
-                    "id": f"{fm['name']}_S{seed}",
-                    "precision": fm['precision'],
-                    "hadamard": fm['hadamard'],
-                    "early_exit": True,
-                    "lambda": best_lambda,
-                    "p_max": best_p_max,
-                    "schedule": best_sched,
-                    "seed": seed
-                })
-        run_stage_parallel(
-            f"Exp 5: Full Comparison (L={best_lambda}, P={best_p_max}, S={best_sched})",
-            full_models_configs,
-            args.max_workers,
-            args.compile,
-            args.max_gpu_workers
-        )
-    
-    # --- Stage 6: Hadamard Analysis ---
-    if args.stage == 0 or args.stage == 6:
-        print("\n" + "="*60)
-        print("Stage: Exp 6: Hadamard Analysis")
-        print("="*60)
-        print("Analysis task reusing models from Exp 5.")
-        print("Please run custom analysis scripts on the generated checkpoints.")
-    
-    # Final summary
     elapsed = time.time() - start_time
     print(f"\n{'='*60}")
-    print("All Stages Completed!")
+    print("Evaluation Suite Finished")
     print(f"Total Time: {elapsed/60:.1f} minutes")
-    print(f"Results Cache: {RESULTS_CACHE_FILE}")
     print(f"{'='*60}\n")
-    
-    # Print final best parameters
-    print("Final Best Parameters:")
-    print(f"  Lambda: {best_lambda}")
-    print(f"  P_max: {best_p_max}")
-    print(f"  Schedule: {best_sched}")
 
 
 if __name__ == "__main__":
