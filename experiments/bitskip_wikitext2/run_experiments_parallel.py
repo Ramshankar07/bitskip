@@ -21,7 +21,7 @@ from tqdm import tqdm
 # Define base paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
-BASE_CMD = f"{sys.executable} {os.path.join(SCRIPT_DIR, 'train.py')} --num_steps 50 --eval_every_steps 10"
+BASE_CMD = f"{sys.executable} {os.path.join(SCRIPT_DIR, 'train.py')} --num_steps 500 --eval_every_steps 50 --dataset mix"
 OUTPUT_BASE_DIR = os.path.join(PROJECT_ROOT, "results")
 LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 RESULTS_CACHE_FILE = os.path.join(OUTPUT_BASE_DIR, "results_cache.json")
@@ -622,7 +622,7 @@ def get_best_schedule_from_cache(schedules: List[str]) -> str:
 def main():
     global _gpu_profile
     
-    parser = argparse.ArgumentParser(description="BitSkip Minimal Parallel Evaluation Runner")
+    parser = argparse.ArgumentParser(description="BitSkip Comprehensive Ablation Runner")
     parser.add_argument("--max_workers", type=int, default=4, help="Max parallel workers per stage")
     parser.add_argument("--max_gpu_workers", type=int, default=None, help="Max concurrent GPU workers (default: min(max_workers, num_gpus))")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for all experiments")
@@ -630,23 +630,31 @@ def main():
     parser.add_argument("--gpu_profile", type=str, default="default", 
                         choices=["h200", "rtx3090", "default"],
                         help="GPU profile for precision-aware batch sizes (h200, rtx3090, default)")
+    parser.add_argument("--stage", type=str, default="all",
+                        choices=["all", "lambda", "p_max", "schedule", "hadamard", "full"],
+                        help="Which stage(s) to run")
+    parser.add_argument("--seeds", type=str, default="42",
+                        help="Comma-separated list of seeds")
     args = parser.parse_args()
     
     # Set global GPU profile for precision-aware batch sizes
     _gpu_profile = args.gpu_profile
     
-    # Optimal parameters identified in research
-    GOLDEN_LAMBDA = 0.3
-    GOLDEN_P_MAX = 0.5
-    GOLDEN_SCHEDULE = "quadratic"
+    # Parse seeds
+    SEEDS = [int(s.strip()) for s in args.seeds.split(",")]
+    
+    # Import ablation configs
+    from model_configs import LAMBDA_VALUES, P_MAX_VALUES, SCHEDULE_OPTIONS
 
     print(f"\n{'='*60}")
-    print("BitSkip Minimal Parallel Evaluation Suite")
+    print("BitSkip Comprehensive Ablation Suite")
     print(f"{'='*60}")
     print(f"Results Cache: {RESULTS_CACHE_FILE}")
     print(f"Max Workers: {args.max_workers}")
     print(f"Compile: {args.compile}")
     print(f"GPU Profile: {args.gpu_profile}")
+    print(f"Stage: {args.stage}")
+    print(f"Seeds: {SEEDS}")
     
     # Show precision-aware batch sizes
     batch_sizes = PRECISION_BATCH_SIZES.get(args.gpu_profile, PRECISION_BATCH_SIZES["default"])
@@ -657,46 +665,176 @@ def main():
     
     if args.dry_run:
         print("DRY RUN MODE - Showing what would be executed\n")
-        return
     
     start_time = time.time()
     
-    # Define minimal set of experiments
-    minimal_configs = [
-        # --- Baselines ---
-        {
-            "id": "Baseline_FP16",
-            "precision": "fp16",
-            "hadamard": False,
-            "early_exit": False
-        },
-        {
-            "id": "Baseline_INT8",
-            "precision": "int8",
-            "hadamard": False,
-            "early_exit": False
-        },
-        # --- The "Best" BitSkip Setup ---
-        {
-            "id": "BitSkip_Golden_INT8_H",
-            "precision": "int8",
-            "hadamard": True,
-            "early_exit": True,
-            "lambda": GOLDEN_LAMBDA,
-            "p_max": GOLDEN_P_MAX,
-            "schedule": GOLDEN_SCHEDULE
-        }
-    ]
+    # =========================================================================
+    # NOTE: Baselines stage removed - results already exist at:
+    #   - results/Baseline_FP16
+    #   - results/Baseline_INT8
+    # =========================================================================
     
-    run_stage_parallel("Minimal Evaluation", minimal_configs, args.max_workers, args.compile, args.max_gpu_workers)
+    # =========================================================================
+    # Stage 2: Lambda (λ) Ablation
+    # =========================================================================
+    if args.stage in ["all", "lambda"]:
+        lambda_configs = []
+        for lam in LAMBDA_VALUES:
+            for seed in SEEDS:
+                for prec in ["fp16", "int8"]:
+                    lambda_configs.append({
+                        "id": f"Lambda_{lam}_{prec.upper()}_s{seed}",
+                        "precision": prec,
+                        "hadamard": False,
+                        "early_exit": True,
+                        "lambda": lam,
+                        "p_max": 0.5,  # Fixed p_max
+                        "schedule": "quadratic",
+                        "seed": seed
+                    })
+        
+        if args.dry_run:
+            print(f"Stage 2 (Lambda Ablation): {len(lambda_configs)} experiments")
+            for c in lambda_configs[:5]:
+                print(f"  - {c['id']}")
+            if len(lambda_configs) > 5:
+                print(f"  ... and {len(lambda_configs) - 5} more")
+        else:
+            run_stage_parallel("Lambda Ablation", lambda_configs, args.max_workers, args.compile, args.max_gpu_workers)
+    
+    # =========================================================================
+    # Stage 3: P_max Ablation
+    # =========================================================================
+    if args.stage in ["all", "p_max"]:
+        pmax_configs = []
+        best_lambda = get_best_param_from_cache("lambda", LAMBDA_VALUES, "Lambda_{val}_INT8_s42") or 0.3
+        
+        for pmax in P_MAX_VALUES:
+            for seed in SEEDS:
+                for prec in ["fp16", "int8"]:
+                    pmax_configs.append({
+                        "id": f"PMax_{pmax}_{prec.upper()}_s{seed}",
+                        "precision": prec,
+                        "hadamard": False,
+                        "early_exit": True,
+                        "lambda": best_lambda,
+                        "p_max": pmax,
+                        "schedule": "quadratic",
+                        "seed": seed
+                    })
+        
+        if args.dry_run:
+            print(f"Stage 3 (P_max Ablation): {len(pmax_configs)} experiments")
+            for c in pmax_configs[:5]:
+                print(f"  - {c['id']}")
+            if len(pmax_configs) > 5:
+                print(f"  ... and {len(pmax_configs) - 5} more")
+        else:
+            run_stage_parallel("P_max Ablation", pmax_configs, args.max_workers, args.compile, args.max_gpu_workers)
+    
+    # =========================================================================
+    # Stage 4: Dropout Schedule Ablation
+    # =========================================================================
+    if args.stage in ["all", "schedule"]:
+        schedule_configs = []
+        best_lambda = get_best_param_from_cache("lambda", LAMBDA_VALUES, "Lambda_{val}_INT8_s42") or 0.3
+        best_pmax = get_best_param_from_cache("p_max", P_MAX_VALUES, "PMax_{val}_INT8_s42") or 0.5
+        
+        for sched in SCHEDULE_OPTIONS:
+            for seed in SEEDS:
+                for prec in ["fp16", "int8"]:
+                    schedule_configs.append({
+                        "id": f"Schedule_{sched}_{prec.upper()}_s{seed}",
+                        "precision": prec,
+                        "hadamard": False,
+                        "early_exit": True,
+                        "lambda": best_lambda,
+                        "p_max": best_pmax,
+                        "schedule": sched,
+                        "seed": seed
+                    })
+        
+        if args.dry_run:
+            print(f"Stage 4 (Schedule Ablation): {len(schedule_configs)} experiments")
+            for c in schedule_configs[:5]:
+                print(f"  - {c['id']}")
+            if len(schedule_configs) > 5:
+                print(f"  ... and {len(schedule_configs) - 5} more")
+        else:
+            run_stage_parallel("Schedule Ablation", schedule_configs, args.max_workers, args.compile, args.max_gpu_workers)
+    
+    # =========================================================================
+    # Stage 5: Hadamard Placement Investigation
+    # =========================================================================
+    if args.stage in ["all", "hadamard"]:
+        hadamard_configs = []
+        best_lambda = get_best_param_from_cache("lambda", LAMBDA_VALUES, "Lambda_{val}_INT8_s42") or 0.3
+        best_pmax = get_best_param_from_cache("p_max", P_MAX_VALUES, "PMax_{val}_INT8_s42") or 0.5
+        best_sched = get_best_schedule_from_cache(SCHEDULE_OPTIONS) or "quadratic"
+        
+        for use_had in [False, True]:
+            for seed in SEEDS:
+                for prec in ["fp16", "int8"]:
+                    had_str = "H" if use_had else "NoH"
+                    hadamard_configs.append({
+                        "id": f"Hadamard_{had_str}_{prec.upper()}_s{seed}",
+                        "precision": prec,
+                        "hadamard": use_had,
+                        "early_exit": True,
+                        "lambda": best_lambda,
+                        "p_max": best_pmax,
+                        "schedule": best_sched,
+                        "seed": seed
+                    })
+        
+        if args.dry_run:
+            print(f"Stage 5 (Hadamard Ablation): {len(hadamard_configs)} experiments")
+            for c in hadamard_configs[:5]:
+                print(f"  - {c['id']}")
+            if len(hadamard_configs) > 5:
+                print(f"  ... and {len(hadamard_configs) - 5} more")
+        else:
+            run_stage_parallel("Hadamard Ablation", hadamard_configs, args.max_workers, args.compile, args.max_gpu_workers)
+    
+    # =========================================================================
+    # Stage 6: Full Golden Configuration (Best of all ablations)
+    # =========================================================================
+    if args.stage in ["all", "full"]:
+        best_lambda = get_best_param_from_cache("lambda", LAMBDA_VALUES, "Lambda_{val}_INT8_s42") or 0.3
+        best_pmax = get_best_param_from_cache("p_max", P_MAX_VALUES, "PMax_{val}_INT8_s42") or 0.5
+        best_sched = get_best_schedule_from_cache(SCHEDULE_OPTIONS) or "quadratic"
+        
+        print(f"\n[Summary] Best hyperparameters from ablations:")
+        print(f"  λ (lambda): {best_lambda}")
+        print(f"  p_max: {best_pmax}")
+        print(f"  schedule: {best_sched}")
+        
+        full_configs = []
+        for seed in SEEDS:
+            full_configs.append({
+                "id": f"BitSkip_Golden_INT8_H_s{seed}",
+                "precision": "int8",
+                "hadamard": True,
+                "early_exit": True,
+                "lambda": best_lambda,
+                "p_max": best_pmax,
+                "schedule": best_sched,
+                "seed": seed
+            })
+        
+        if args.dry_run:
+            print(f"Stage 6 (Golden Config): {len(full_configs)} experiments")
+            for c in full_configs:
+                print(f"  - {c['id']}")
+        else:
+            run_stage_parallel("Golden Configuration", full_configs, args.max_workers, args.compile, args.max_gpu_workers)
     
     elapsed = time.time() - start_time
     print(f"\n{'='*60}")
-    print("Evaluation Suite Finished")
+    print("Ablation Suite Finished")
     print(f"Total Time: {elapsed/60:.1f} minutes")
     print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
     main()
-

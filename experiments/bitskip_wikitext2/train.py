@@ -30,15 +30,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="BitSkip WikiText-2 Training")
+    parser = argparse.ArgumentParser(description="BitSkip Multi-Dataset Training")
     
     # Core Experiment Identifiers
     parser.add_argument("--model_id", type=str, required=True, help="Unique ID for the experiment run")
     parser.add_argument("--output_dir", type=str, default="./results", help="Directory to save results")
     
-    # Model Configuration Overrides
+    # Model Configuration
+    parser.add_argument("--model_size", type=str, default="125M", choices=["125M"], help="Model size preset")
     parser.add_argument("--precision", type=str, default="fp16", choices=["fp16", "int8", "int4"], help="Weight precision")
     parser.add_argument("--use_hadamard", action="store_true", help="Use Hadamard transform")
+    
+    # Dataset Configuration
+    parser.add_argument("--dataset", type=str, default="wikitext2", 
+                        choices=["wikitext2", "wikitext103", "ptb", "mix"], help="Training dataset")
     
     # Early Exit Configuration Overrides
     parser.add_argument("--no_early_exit", action="store_true", help="Disable early exit completely")
@@ -63,21 +68,18 @@ def set_seed(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-def get_wikitext2_loader(tokenizer, batch_size, seq_length):
-    logger.info("Loading WikiText-2 dataset...")
-    dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
-    
+def _create_lm_dataloader(dataset, tokenizer, batch_size, seq_length, shuffle=False):
+    """Helper to create a language modeling dataloader from a HuggingFace dataset."""
     def tokenize_function(examples):
         return tokenizer(examples["text"], return_special_tokens_mask=True)
 
-    tokenized_datasets = dataset.map(
+    tokenized = dataset.map(
         tokenize_function,
         batched=True,
         num_proc=4,
-        remove_columns=["text"],
+        remove_columns=["text"] if "text" in dataset.column_names else dataset.column_names,
     )
 
-    # Concatenate all texts
     def group_texts(examples):
         concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
         total_length = len(concatenated_examples[list(examples.keys())[0]])
@@ -90,40 +92,134 @@ def get_wikitext2_loader(tokenizer, batch_size, seq_length):
         result["labels"] = result["input_ids"].copy()
         return result
 
-    lm_datasets = tokenized_datasets.map(
-        group_texts,
-        batched=True,
-        num_proc=4,
-    )
-    
-    train_dataset = lm_datasets["train"]
-    val_dataset = lm_datasets["validation"]
-    test_dataset = lm_datasets["test"]
+    lm_dataset = tokenized.map(group_texts, batched=True, num_proc=4)
     
     def collate_fn(batch):
         input_ids = [item["input_ids"] for item in batch]
         labels = [item["labels"] for item in batch]
-        # Attention mask is all 1s since we grouped texts perfectly
         attention_mask = [[1] * len(ids) for ids in input_ids]
-        
         return {
             "input_ids": torch.tensor(input_ids),
             "attention_mask": torch.tensor(attention_mask),
             "labels": torch.tensor(labels)
         }
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, collate_fn=collate_fn, pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, collate_fn=collate_fn, pin_memory=True)
+    return DataLoader(lm_dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn, pin_memory=True)
+
+
+def get_wikitext2_loader(tokenizer, batch_size, seq_length):
+    """Load WikiText-2 dataset."""
+    logger.info("Loading WikiText-2 dataset...")
+    dataset = load_dataset("wikitext", "wikitext-2-raw-v1")
     
+    train_loader = _create_lm_dataloader(dataset["train"], tokenizer, batch_size, seq_length, shuffle=True)
+    val_loader = _create_lm_dataloader(dataset["validation"], tokenizer, batch_size, seq_length)
+    test_loader = _create_lm_dataloader(dataset["test"], tokenizer, batch_size, seq_length)
+    
+    logger.info(f"WikiText-2: {len(train_loader)} train batches, {len(val_loader)} val batches")
     return train_loader, val_loader, test_loader
+
+
+def get_wikitext103_loader(tokenizer, batch_size, seq_length):
+    """Load WikiText-103 dataset."""
+    logger.info("Loading WikiText-103 dataset...")
+    dataset = load_dataset("wikitext", "wikitext-103-raw-v1")
+    
+    train_loader = _create_lm_dataloader(dataset["train"], tokenizer, batch_size, seq_length, shuffle=True)
+    val_loader = _create_lm_dataloader(dataset["validation"], tokenizer, batch_size, seq_length)
+    test_loader = _create_lm_dataloader(dataset["test"], tokenizer, batch_size, seq_length)
+    
+    logger.info(f"WikiText-103: {len(train_loader)} train batches, {len(val_loader)} val batches")
+    return train_loader, val_loader, test_loader
+
+
+def get_ptb_loader(tokenizer, batch_size, seq_length):
+    """Load Penn Treebank dataset."""
+    logger.info("Loading Penn Treebank dataset...")
+    dataset = load_dataset("ptb_text_only")
+    
+    # PTB uses 'sentence' column instead of 'text'
+    def rename_column(example):
+        return {"text": example["sentence"]}
+    
+    dataset = dataset.map(rename_column, remove_columns=["sentence"])
+    
+    train_loader = _create_lm_dataloader(dataset["train"], tokenizer, batch_size, seq_length, shuffle=True)
+    val_loader = _create_lm_dataloader(dataset["validation"], tokenizer, batch_size, seq_length)
+    test_loader = _create_lm_dataloader(dataset["test"], tokenizer, batch_size, seq_length)
+    
+    logger.info(f"PTB: {len(train_loader)} train batches, {len(val_loader)} val batches")
+    return train_loader, val_loader, test_loader
+
+
+def get_tinystories_loader(tokenizer, batch_size, seq_length):
+    """Load TinyStories dataset."""
+    logger.info("Loading TinyStories dataset...")
+    dataset = load_dataset("roneneldan/TinyStories")
+    
+    train_loader = _create_lm_dataloader(dataset["train"], tokenizer, batch_size, seq_length, shuffle=True)
+    val_loader = _create_lm_dataloader(dataset["validation"], tokenizer, batch_size, seq_length)
+    
+    return train_loader, val_loader, None
+
+
+def get_mixed_loader(tokenizer, batch_size, seq_length):
+    """Load mixed dataset (TinyStories 50%, WT103 30%, C4 20%)."""
+    from datasets import interleave_datasets
+    logger.info("Loading Mixed Dataset (TS 50%, WT103 30%, C4 20%)...")
+    
+    # TinyStories (50%)
+    ts_train = load_dataset("roneneldan/TinyStories", split="train")
+    
+    # WikiText-103 (30%)
+    wt_train = load_dataset("wikitext", "wikitext-103-raw-v1", split="train")
+    
+    # C4 Subset (20%) - Use streaming to avoid downloading massive dataset
+    logger.info("Using streaming for C4 to select subset...")
+    c4_stream = load_dataset("allenai/c4", "en", split="train", streaming=True)
+    # Take a reasonable subset for buffer shuffling
+    c4_subset = c4_stream.take(200000) 
+    
+    # Interleave training sets
+    mixed_train = interleave_datasets(
+        [ts_train, wt_train, c4_subset],
+        probabilities=[0.5, 0.3, 0.2],
+        stopping_strategy="first_exhausted"
+    )
+    
+    train_loader = _create_lm_dataloader(mixed_train, tokenizer, batch_size, seq_length, shuffle=True)
+    
+    # For validation/test, use WikiText-103 as standard benchmark
+    wt_val = load_dataset("wikitext", "wikitext-103-raw-v1", split="validation")
+    wt_test = load_dataset("wikitext", "wikitext-103-raw-v1", split="test")
+    
+    val_loader = _create_lm_dataloader(wt_val, tokenizer, batch_size, seq_length)
+    test_loader = _create_lm_dataloader(wt_test, tokenizer, batch_size, seq_length)
+    
+    logger.info(f"Mixed Dataset: {len(train_loader)} train batches (approx), {len(val_loader)} WT103 val batches")
+    return train_loader, val_loader, test_loader
+
+
+def get_data_loaders(dataset_name: str, tokenizer, batch_size, seq_length):
+    """Dispatcher for data loaders."""
+    if dataset_name == "wikitext2":
+        return get_wikitext2_loader(tokenizer, batch_size, seq_length)
+    elif dataset_name == "wikitext103":
+        return get_wikitext103_loader(tokenizer, batch_size, seq_length)
+    elif dataset_name == "ptb":
+        return get_ptb_loader(tokenizer, batch_size, seq_length)
+    elif dataset_name == "mix":
+        return get_mixed_loader(tokenizer, batch_size, seq_length)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}. Available: wikitext2, wikitext103, ptb, mix")
 
 def main():
     args = parse_args()
     set_seed(args.seed)
     
-    # Initialize Config
-    config = ExperimentConfig()
+    # Initialize Config with model size preset
+    config = ExperimentConfig(model_size=args.model_size)
+    config.dataset = args.dataset
     
     # Apply Overrides
     if args.precision == "fp16":
@@ -164,8 +260,11 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
     tokenizer.pad_token = tokenizer.eos_token
     
-    # Initialize Data
-    train_loader, val_loader, test_loader = get_wikitext2_loader(tokenizer, config.batch_size, config.max_position_embeddings)
+    # Initialize Data (multi-dataset support)
+    train_loader, val_loader, test_loader = get_data_loaders(
+        config.dataset, tokenizer, config.batch_size, config.max_position_embeddings
+    )
+    logger.info(f"Dataset: {config.dataset}, Model Size: {config.model_size}")
     
     # Initialize Model
     model = create_model(config)

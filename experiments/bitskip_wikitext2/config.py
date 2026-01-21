@@ -1,10 +1,16 @@
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 @dataclass
 class ExperimentConfig:
-    # Model Architecture
+    # Model Size (preset)
+    model_size: str = "125M"  # "125M" or "200M"
+    
+    # Dataset
+    dataset: str = "mix"  # wikitext2, wikitext103, ptb, mix
+    
+    # Model Architecture (can be overridden or set by model_size)
     vocab_size: int = 50257  # GPT-2 tokenizer
     hidden_size: int = 768
     num_hidden_layers: int = 12
@@ -37,5 +43,18 @@ class ExperimentConfig:
     min_delta: float = 0.01  # Minimum improvement threshold for validation perplexity
     
     def __post_init__(self):
+        # Apply model size preset if specified
+        self.apply_model_size(self.model_size)
         # Ensure hidden_size is divisible by heads
         assert self.hidden_size % self.num_attention_heads == 0
+    
+    def apply_model_size(self, size: str):
+        """Apply a model size preset (125M or 200M)."""
+        from model_configs import MODEL_CONFIGS
+        if size in MODEL_CONFIGS:
+            cfg = MODEL_CONFIGS[size]
+            self.hidden_size = cfg["hidden_size"]
+            self.num_hidden_layers = cfg["num_hidden_layers"]
+            self.num_attention_heads = cfg["num_attention_heads"]
+            self.intermediate_size = cfg["intermediate_size"]
+            self.model_size = size
