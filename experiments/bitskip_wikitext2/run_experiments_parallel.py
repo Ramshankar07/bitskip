@@ -21,7 +21,7 @@ from tqdm import tqdm
 # Define base paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "../../"))
-BASE_CMD = f"{sys.executable} {os.path.join(SCRIPT_DIR, 'train.py')} --num_steps 500 --eval_every_steps 50 --dataset mix"
+BASE_CMD = f"{sys.executable} {os.path.join(SCRIPT_DIR, 'train.py')} --num_steps 30 --eval_every_steps 10 --dataset mix"
 OUTPUT_BASE_DIR = os.path.join(PROJECT_ROOT, "results")
 LOGS_DIR = os.path.join(PROJECT_ROOT, "logs")
 RESULTS_CACHE_FILE = os.path.join(OUTPUT_BASE_DIR, "results_cache.json")
@@ -347,6 +347,18 @@ def run_single_experiment(args_tuple: Tuple[Dict, int, bool]) -> Tuple[str, floa
                 print(f"  Tip: Try reducing --max_workers or --max_gpu_workers, or reduce batch size in config")
             else:
                 print(f"[FAIL] {model_id} failed (check {log_file})")
+                # Show last few lines of log for debugging
+                try:
+                    if os.path.exists(log_file):
+                        with open(log_file, 'r') as f:
+                            lines = f.readlines()
+                            last_lines = lines[-15:]
+                            print(f"\n--- Last 15 lines of {model_id}.log ---")
+                            for line in last_lines:
+                                print(f"  {line.rstrip()}")
+                            print("-" * 40 + "\n")
+                except Exception:
+                    pass
             return (model_id, float('inf'), False)
             
     except Exception as e:
@@ -623,7 +635,7 @@ def main():
     global _gpu_profile
     
     parser = argparse.ArgumentParser(description="BitSkip Comprehensive Ablation Runner")
-    parser.add_argument("--max_workers", type=int, default=4, help="Max parallel workers per stage")
+    parser.add_argument("--max_workers", type=int, default=1, help="Max parallel workers per stage (set to 1 for sequential)")
     parser.add_argument("--max_gpu_workers", type=int, default=None, help="Max concurrent GPU workers (default: min(max_workers, num_gpus))")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile for all experiments")
     parser.add_argument("--dry_run", action="store_true", help="Print commands without running")
