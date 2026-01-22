@@ -70,14 +70,25 @@ def set_seed(seed):
 
 def _create_lm_dataloader(dataset, tokenizer, batch_size, seq_length, shuffle=False):
     """Helper to create a language modeling dataloader from a HuggingFace dataset."""
+    from datasets import IterableDataset
+    is_iterable = isinstance(dataset, IterableDataset)
+    
     def tokenize_function(examples):
         return tokenizer(examples["text"], return_special_tokens_mask=True)
 
+    # For IterableDataset, num_proc is not supported and column_names is handled differently
+    map_kwargs = {"batched": True}
+    if not is_iterable:
+        map_kwargs["num_proc"] = 4
+        remove_cols = ["text"] if "text" in dataset.column_names else dataset.column_names
+    else:
+        # For IterableDataset we can just let it be or specify columns if known
+        remove_cols = ["text"]
+
     tokenized = dataset.map(
         tokenize_function,
-        batched=True,
-        num_proc=4,
-        remove_columns=["text"] if "text" in dataset.column_names else dataset.column_names,
+        **map_kwargs,
+        remove_columns=remove_cols,
     )
 
     def group_texts(examples):
@@ -92,7 +103,10 @@ def _create_lm_dataloader(dataset, tokenizer, batch_size, seq_length, shuffle=Fa
         result["labels"] = result["input_ids"].copy()
         return result
 
-    lm_dataset = tokenized.map(group_texts, batched=True, num_proc=4)
+    lm_dataset = tokenized.map(group_texts, **map_kwargs)
+    
+    if is_iterable and shuffle:
+        lm_dataset = lm_dataset.shuffle(buffer_size=1000, seed=42)
     
     def collate_fn(batch):
         input_ids = [item["input_ids"] for item in batch]
@@ -104,7 +118,14 @@ def _create_lm_dataloader(dataset, tokenizer, batch_size, seq_length, shuffle=Fa
             "labels": torch.tensor(labels)
         }
 
-    return DataLoader(lm_dataset, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn, pin_memory=True)
+    # DataLoader shuffle must be False for IterableDataset
+    return DataLoader(
+        lm_dataset, 
+        batch_size=batch_size, 
+        shuffle=shuffle if not is_iterable else False, 
+        collate_fn=collate_fn, 
+        pin_memory=True
+    )
 
 
 def get_wikitext2_loader(tokenizer, batch_size, seq_length):
@@ -164,27 +185,21 @@ def get_tinystories_loader(tokenizer, batch_size, seq_length):
 
 
 def get_mixed_loader(tokenizer, batch_size, seq_length):
-    """Load mixed dataset (TinyStories 50%, WT103 30%, C4 20%)."""
+    """Load mixed dataset (TinyStories 50%, WT103 50%)."""
     from datasets import interleave_datasets
-    logger.info("Loading Mixed Dataset (TS 50%, WT103 30%, C4 20%)...")
+    logger.info("Loading Mixed Dataset (TS 50%, WT103 50%)...")
     
-    # TinyStories (50%)
+    # TinyStories (50%) - Standard Dataset
     ts_train = load_dataset("roneneldan/TinyStories", split="train")
     
-    # WikiText-103 (30%)
+    # WikiText-103 (50%) - Standard Dataset
     wt_train = load_dataset("wikitext", "wikitext-103-raw-v1", split="train")
     
-    # C4 Subset (20%) - Use streaming to avoid downloading massive dataset
-    logger.info("Using streaming for C4 to select subset...")
-    c4_stream = load_dataset("allenai/c4", "en", split="train", streaming=True)
-    # Take a reasonable subset for buffer shuffling
-    c4_subset = c4_stream.take(200000) 
-    
-    # Interleave training sets
+    # Interleave training sets (both are Dataset objects)
     mixed_train = interleave_datasets(
-        [ts_train, wt_train, c4_subset],
-        probabilities=[0.5, 0.3, 0.2],
-        stopping_strategy="first_exhausted"
+        [ts_train, wt_train],
+        probabilities=[0.5, 0.5],
+        stopping_strategy="all_exhausted"
     )
     
     train_loader = _create_lm_dataloader(mixed_train, tokenizer, batch_size, seq_length, shuffle=True)
@@ -196,7 +211,7 @@ def get_mixed_loader(tokenizer, batch_size, seq_length):
     val_loader = _create_lm_dataloader(wt_val, tokenizer, batch_size, seq_length)
     test_loader = _create_lm_dataloader(wt_test, tokenizer, batch_size, seq_length)
     
-    logger.info(f"Mixed Dataset: {len(train_loader)} train batches (approx), {len(val_loader)} WT103 val batches")
+    logger.info(f"Mixed Dataset: {len(train_loader)} train batches, {len(val_loader)} WT103 val batches")
     return train_loader, val_loader, test_loader
 
 
