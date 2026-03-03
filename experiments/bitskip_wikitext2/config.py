@@ -28,6 +28,10 @@ class ExperimentConfig:
     early_exit_loss_weight: float = 0.0  # lambda
     dropout_probability_max: float = 0.0 # p_max
     dropout_schedule: str = "quadratic" # quadratic, linear, uniform
+
+    # V2 auxiliary losses
+    lambda_q: float = 0.0  # Quantization loss weight (0 = disabled)
+    lambda_r: float = 0.0  # Routing loss weight (0 = disabled)
     
     # Training
     batch_size: int = 8

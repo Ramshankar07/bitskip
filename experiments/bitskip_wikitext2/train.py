@@ -50,7 +50,11 @@ def parse_args():
     parser.add_argument("--early_exit_lambda", type=float, default=0.0, help="Early exit loss weight")
     parser.add_argument("--p_max", type=float, default=0.0, help="Maximum layer dropout probability")
     parser.add_argument("--dropout_schedule", type=str, default="quadratic", help="Dropout schedule")
-    
+
+    # V2 Auxiliary Loss Overrides
+    parser.add_argument("--lambda_q", type=float, default=0.0, help="Quantization loss weight (v2)")
+    parser.add_argument("--lambda_r", type=float, default=0.0, help="Routing loss weight (v2)")
+
     # Training Overrides
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size per device")
@@ -59,7 +63,11 @@ def parse_args():
     parser.add_argument("--num_steps", type=int, default=None, help="Number of training steps")
     parser.add_argument("--eval_every_steps", type=int, default=None, help="Evaluation frequency")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile to speed up training")
-    
+
+    # Logging
+    parser.add_argument("--wandb", action="store_true", help="Enable wandb logging")
+    parser.add_argument("--wandb_project", type=str, default="bitskip-v2", help="wandb project name")
+
     return parser.parse_args()
 
 def set_seed(seed):
@@ -120,11 +128,14 @@ def _create_lm_dataloader(dataset, tokenizer, batch_size, seq_length, shuffle=Fa
 
     # DataLoader shuffle must be False for IterableDataset
     return DataLoader(
-        lm_dataset, 
-        batch_size=batch_size, 
-        shuffle=shuffle if not is_iterable else False, 
-        collate_fn=collate_fn, 
-        pin_memory=True
+        lm_dataset,
+        batch_size=batch_size,
+        shuffle=shuffle if not is_iterable else False,
+        collate_fn=collate_fn,
+        pin_memory=True,
+        num_workers=4,
+        prefetch_factor=2,
+        persistent_workers=True,
     )
 
 
@@ -255,7 +266,11 @@ def main():
         config.early_exit_loss_weight = args.early_exit_lambda
         config.dropout_probability_max = args.p_max
         config.dropout_schedule = args.dropout_schedule
-        
+
+    # V2 auxiliary losses
+    config.lambda_q = args.lambda_q
+    config.lambda_r = args.lambda_r
+
     config.batch_size = args.batch_size
     config.gradient_accumulation_steps = args.gradient_accumulation_steps
     config.learning_rate = args.learning_rate
@@ -291,11 +306,21 @@ def main():
         device = torch.device("cpu")
     logger.info(f"Using device: {device}")
     model.to(device)
-    
+
+    # Initialize wandb
+    from bitnet.utils.wandb_logger import WandbLogger
+    wandb_logger = WandbLogger(
+        project=args.wandb_project,
+        run_name=args.model_id,
+        config=vars(config),
+        enabled=args.wandb,
+        tags=[config.dataset, args.precision, f"lr{config.learning_rate}"],
+    )
+
     if args.compile:
         if hasattr(torch, "compile"):
-            logger.info("Compiling model with torch.compile...")
-            model = torch.compile(model)
+            logger.info("Compiling model with torch.compile (max-autotune)...")
+            model = torch.compile(model, mode="max-autotune")
         else:
             logger.warning("torch.compile is not available in this version of PyTorch. Skipping compilation.")
     
@@ -334,108 +359,119 @@ def main():
             for batch in train_loader:
                 if global_step >= num_training_steps:
                     break
-                
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
-            labels = batch["labels"].to(device)
-            
-            # Forward pass
-            # Note: BitNetModel2 forward supports exit_layer and training_step for curriculum
-            with torch.amp.autocast('cuda', enabled=scaler is not None):
-                outputs = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels,
-                    training_step=global_step, # For curriculum if needed
-                )
-            
-            loss = outputs.loss
-            
-            # Backward pass
-            loss = loss / config.gradient_accumulation_steps
-            
-            if scaler is not None:
-                scaler.scale(loss).backward()
-            else:
-                loss.backward()
-            
-            if (global_step + 1) % config.gradient_accumulation_steps == 0:
-                if scaler is not None:
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                    optimizer.step()
-                
-                scheduler.step()
-                optimizer.zero_grad()
-                
-                # Update progress bar
-                current_loss = loss.item() * config.gradient_accumulation_steps
-                pbar.set_postfix({"loss": f"{current_loss:.4f}", "val_ppl": f"{best_val_ppl:.2f}" if best_val_ppl != float('inf') else "N/A"})
-            
-            global_step += 1
-            pbar.update(1)
-            
-            # Periodic validation and early stopping check
-            if global_step % config.eval_every_steps == 0:
-                model.eval()
-                val_loss = 0.0
-                val_steps = 0
-                
-                with torch.no_grad():
-                    for val_batch in val_loader:
-                        val_input_ids = val_batch["input_ids"].to(device)
-                        val_attention_mask = val_batch["attention_mask"].to(device)
-                        val_labels = val_batch["labels"].to(device)
-                        
-                        val_outputs = model(
-                            input_ids=val_input_ids,
-                            attention_mask=val_attention_mask,
-                            labels=val_labels
-                        )
-                        val_loss += val_outputs.loss.item()
-                        val_steps += 1
-                
-                avg_val_loss = val_loss / val_steps
-                val_ppl = math.exp(avg_val_loss)
-                
-                logger.info(f"Validation at step {global_step}: PPL={val_ppl:.2f}, Best={best_val_ppl:.2f}")
-                
-                # Periodically save results even if not the best
-                results_file = os.path.join(run_dir, "results.txt")
-                with open(results_file, "w") as f:
-                    f.write(f"Validation Perplexity: {val_ppl:.2f}\n")
-                    f.write(f"Last Step: {global_step}\n")
-                    if best_val_ppl != float('inf'):
-                        f.write(f"Best Validation PPL: {best_val_ppl:.2f}\n")
 
-                # Check for improvement
-                if val_ppl < best_val_ppl - config.min_delta:
-                    best_val_ppl = val_ppl
-                    patience_counter = 0
-                    best_model_state = model.state_dict().copy()
-                    logger.info(f"New best validation PPL: {best_val_ppl:.2f}")
-                    # Save best model
-                    save_file(best_model_state, os.path.join(run_dir, "model.safetensors"))
+                input_ids = batch["input_ids"].to(device)
+                attention_mask = batch["attention_mask"].to(device)
+                labels = batch["labels"].to(device)
+
+                # Forward pass
+                with torch.amp.autocast('cuda', enabled=scaler is not None):
+                    outputs = model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        labels=labels,
+                        training_step=global_step,
+                    )
+
+                loss = outputs.loss
+
+                # Backward pass
+                loss = loss / config.gradient_accumulation_steps
+
+                if scaler is not None:
+                    scaler.scale(loss).backward()
                 else:
-                    patience_counter += 1
-                    logger.info(f"No improvement. Patience: {patience_counter}/{config.patience}")
-                    
-                    if patience_counter >= config.patience:
-                        logger.info(f"Early stopping triggered at step {global_step}")
-                        early_stopped = True
-                        if best_model_state is not None:
-                            model.load_state_dict(best_model_state)
-                        break
-                
-                model.train()
-            
-            if early_stopped:
-                break
-        
+                    loss.backward()
+
+                if (global_step + 1) % config.gradient_accumulation_steps == 0:
+                    if scaler is not None:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        optimizer.step()
+
+                    scheduler.step()
+                    optimizer.zero_grad()
+
+                    # Update progress bar and log
+                    current_loss = loss.item() * config.gradient_accumulation_steps
+                    pbar.set_postfix({"loss": f"{current_loss:.4f}", "val_ppl": f"{best_val_ppl:.2f}" if best_val_ppl != float('inf') else "N/A"})
+                    wandb_logger.log({
+                        "train/loss": current_loss,
+                        "train/lr": scheduler.get_last_lr()[0],
+                    }, step=global_step)
+
+                global_step += 1
+                pbar.update(1)
+
+                # Periodic validation and early stopping check
+                if global_step % config.eval_every_steps == 0:
+                    model.eval()
+                    val_loss = 0.0
+                    val_steps = 0
+
+                    max_val_batches = 50  # Cap validation to avoid slowdowns
+                    with torch.no_grad():
+                        for val_batch in val_loader:
+                            if val_steps >= max_val_batches:
+                                break
+                            val_input_ids = val_batch["input_ids"].to(device)
+                            val_attention_mask = val_batch["attention_mask"].to(device)
+                            val_labels = val_batch["labels"].to(device)
+
+                            val_outputs = model(
+                                input_ids=val_input_ids,
+                                attention_mask=val_attention_mask,
+                                labels=val_labels
+                            )
+                            val_loss += val_outputs.loss.item()
+                            val_steps += 1
+
+                    avg_val_loss = val_loss / val_steps
+                    val_ppl = math.exp(avg_val_loss)
+
+                    logger.info(f"Validation at step {global_step}: PPL={val_ppl:.2f}, Best={best_val_ppl:.2f}")
+                    wandb_logger.log({
+                        "val/loss": avg_val_loss,
+                        "val/perplexity": val_ppl,
+                        "val/best_ppl": best_val_ppl if best_val_ppl != float('inf') else val_ppl,
+                    }, step=global_step)
+
+                    # Periodically save results even if not the best
+                    results_file = os.path.join(run_dir, "results.txt")
+                    with open(results_file, "w") as f:
+                        f.write(f"Validation Perplexity: {val_ppl:.2f}\n")
+                        f.write(f"Last Step: {global_step}\n")
+                        if best_val_ppl != float('inf'):
+                            f.write(f"Best Validation PPL: {best_val_ppl:.2f}\n")
+
+                    # Check for improvement
+                    if val_ppl < best_val_ppl - config.min_delta:
+                        best_val_ppl = val_ppl
+                        patience_counter = 0
+                        best_model_state = model.state_dict().copy()
+                        logger.info(f"New best validation PPL: {best_val_ppl:.2f}")
+                        # Save best model
+                        save_file(best_model_state, os.path.join(run_dir, "model.safetensors"))
+                    else:
+                        patience_counter += 1
+                        logger.info(f"No improvement. Patience: {patience_counter}/{config.patience}")
+
+                        if patience_counter >= config.patience:
+                            logger.info(f"Early stopping triggered at step {global_step}")
+                            early_stopped = True
+                            if best_model_state is not None:
+                                model.load_state_dict(best_model_state)
+                            break
+
+                    model.train()
+
+                if early_stopped:
+                    break
+
             if early_stopped:
                 break
     except KeyboardInterrupt:
@@ -518,6 +554,13 @@ def main():
     except Exception as e:
         logger.error(f"Failed to write results file: {e}")
         raise
+
+    # Log final metrics and close wandb
+    wandb_logger.summary("final_ppl", perplexity)
+    wandb_logger.summary("best_val_ppl", best_val_ppl if best_val_ppl != float('inf') else perplexity)
+    wandb_logger.summary("total_steps", global_step)
+    wandb_logger.summary("early_stopped", early_stopped)
+    wandb_logger.finish()
 
 if __name__ == "__main__":
     main()

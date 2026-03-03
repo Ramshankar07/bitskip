@@ -95,9 +95,10 @@ def compute_early_exit_loss(
         return torch.tensor(0.0, device=targets.device if targets is not None else 'cpu', requires_grad=True)
     
     L = len(hidden_states_list)
-    weights = [sum(k+1 for k in range(l+1)) for l in range(L)]
+    # Paper formula: w_i = (i+1)/L, then normalize
+    weights = [(l + 1) / L for l in range(L)]
     weight_sum = sum(weights)
-    normalized_weights = [w/weight_sum for w in weights]
+    normalized_weights = [w / weight_sum for w in weights]
     
     total_loss = 0.0
     valid_loss_count = 0
@@ -347,7 +348,8 @@ class BitNetModel2(nn.Module):
             # Initialize layer outputs
             all_hidden_states = []  # Always collect for early exit loss
             early_exit_losses = []
-            
+            routing_probs = []  # Collect routing probabilities for routing loss
+
             # Process each layer
             for layer_idx in range(self.config.num_hidden_layers):
                 if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
@@ -380,10 +382,17 @@ class BitNetModel2(nn.Module):
                     else:
                         raise e
                 
+                # Collect routing probabilities for routing loss
+                if bool(getattr(self, 'training', False)) and getattr(self.config, 'lambda_r', 0) > 0:
+                    p_exit, _ = self.layers[layer_idx].get_routing_decision(
+                        hidden_states, training=True
+                    )
+                    routing_probs.append(p_exit)
+
                 if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
                     print(f"ERROR: NaN/Inf detected in hidden_states after layer {layer_idx}!")
                     break  # Stop processing to prevent further NaN propagation
-                
+
                 # Store hidden states if requested
                 if output_hidden_states:
                     all_hidden_states.append(hidden_states)
@@ -432,14 +441,45 @@ class BitNetModel2(nn.Module):
                 # Add early exit losses if any and early exit is enabled
                 if bool(getattr(self, 'training', False)) and early_exit_losses and bool(getattr(self.config, 'use_early_exit', False)):
                     early_exit_loss = compute_early_exit_loss(
-                        all_hidden_states, # Pass all hidden states for loss computation
+                        all_hidden_states,
                         labels,
                         self.lm_head,
-                        training_step, # Pass training_step for curriculum
-                        lambda l, _: self.early_exit_curriculum[l], # Pass curriculum_fn
+                        training_step,
+                        lambda l, _: self.early_exit_curriculum[l],
                         self.config.early_exit_threshold
                     )
                     loss = loss + early_exit_loss
+
+                # Add routing loss (v2)
+                if bool(getattr(self, 'training', False)) and routing_probs and getattr(self.config, 'lambda_r', 0) > 0:
+                    from .routing import RoutingLoss
+                    routing_loss_fn = RoutingLoss(
+                        target_exit_layer=self.config.num_hidden_layers / 2,
+                        num_layers=self.config.num_hidden_layers,
+                    )
+                    routing_loss = routing_loss_fn(routing_probs)
+                    if torch.isfinite(routing_loss):
+                        loss = loss + self.config.lambda_r * routing_loss
+
+                # Add quantization loss (v2)
+                if bool(getattr(self, 'training', False)) and getattr(self.config, 'lambda_q', 0) > 0:
+                    quant_loss = torch.tensor(0.0, device=loss.device)
+                    n_quant = 0
+                    for module in self.modules():
+                        if hasattr(module, 'weight') and isinstance(module, nn.Linear) and not isinstance(module, nn.Embedding):
+                            if hasattr(module, 'weight_scale'):
+                                w = module.weight
+                                w_scale = w.abs().mean().clamp(min=1e-6)
+                                w_q = torch.zeros_like(w)
+                                w_q[w > 0.5 * w_scale] = 1.0
+                                w_q[w < -0.5 * w_scale] = -1.0
+                                w_q = w_q * w_scale
+                                quant_loss = quant_loss + F.mse_loss(w, w_q)
+                                n_quant += 1
+                    if n_quant > 0:
+                        quant_loss = quant_loss / n_quant
+                        if torch.isfinite(quant_loss):
+                            loss = loss + self.config.lambda_q * quant_loss
             
             if not return_dict:
                 return tuple(v for v in [logits, all_hidden_states, loss] if v is not None)

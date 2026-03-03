@@ -26,7 +26,11 @@ def create_model(exp_config):
         # We might need to handle p_max specifically if it's not in DefaultConfig standard fields yet
         # checking previous view, skip_probability was there, likely p_max maps to skip_probability or similar
         skip_probability=exp_config.dropout_probability_max,
-        use_layer_skipping=exp_config.dropout_probability_max > 0
+        use_layer_skipping=exp_config.dropout_probability_max > 0,
+
+        # V2 auxiliary loss weights
+        lambda_q=getattr(exp_config, 'lambda_q', 0.0),
+        lambda_r=getattr(exp_config, 'lambda_r', 0.0),
     )
     
     # Select model class based on Hadamard usage
