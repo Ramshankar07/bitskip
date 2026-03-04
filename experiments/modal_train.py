@@ -482,11 +482,20 @@ def _analyze_weights(state_dict):
         all_stats.append(stats)
     summary = {}
     if all_stats:
+        scales = [s["scale"] for s in all_stats]
+        sparsities = [s["sparsity"] for s in all_stats]
+        n = len(all_stats)
         summary = {
             "quantizable_keys": len(layers),
             "total_quantizable_params": sum(e["numel"] for e in layers),
-            "mean_scale": sum(s["scale"] for s in all_stats) / len(all_stats),
-            "mean_sparsity": sum(s["sparsity"] for s in all_stats) / len(all_stats),
+            "mean_scale": sum(scales) / n,
+            "min_scale": min(scales),
+            "max_scale": max(scales),
+            "mean_sparsity": sum(sparsities) / n,
+            "max_sparsity": max(sparsities),
+            "layers_high_sparsity": sum(1 for s in sparsities if s >= 0.5),
+            "mean_frac_pos": sum(s["frac_pos"] for s in all_stats) / n,
+            "mean_frac_neg": sum(s["frac_neg"] for s in all_stats) / n,
         }
     return {"layers": layers, "summary": summary}
 
@@ -812,7 +821,19 @@ def run_composition(
                 upload_1_5bit=True,
             )
             if out.get("ok"):
-                print(f"    OK: {repo_id}")
+                ppl = r.get("best_val_ppl")
+                print(f"    OK: {repo_id}  (best val PPL: {ppl:.2f})")
+                summary = out.get("summary") or {}
+                if summary:
+                    print(f"    Weight insights: keys={summary.get('quantizable_keys', '—')} "
+                          f"params={summary.get('total_quantizable_params', '—')} "
+                          f"scale=[{summary.get('min_scale', 0):.4f}, {summary.get('max_scale', 0):.4f}] "
+                          f"mean_scale={summary.get('mean_scale', 0):.6f}")
+                    print(f"    Sparsity: mean={summary.get('mean_sparsity', 0):.2%} "
+                          f"max={summary.get('max_sparsity', 0):.2%} "
+                          f"layers_high(≥50%)={summary.get('layers_high_sparsity', 0)}")
+                    print(f"    Ternary: frac +1={summary.get('mean_frac_pos', 0):.2%} "
+                          f"frac -1={summary.get('mean_frac_neg', 0):.2%}")
             else:
                 print(f"    Failed: {out.get('error', out)}")
         print("=" * 70)
