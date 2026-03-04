@@ -98,22 +98,23 @@ class BitNetGQA2(nn.Module):
     def _repeat_kv(self, x: torch.Tensor, n_rep: int) -> torch.Tensor:
         """
         Repeat key/value heads for grouped query attention.
-        
+
         Args:
-            x: Key or value tensor of shape (batch_size, seq_len, num_kv_heads, head_dim)
+            x: Key or value tensor of shape (batch_size, num_kv_heads, seq_len, head_dim)
             n_rep: Number of repetitions (num_queries_per_kv)
-            
+
         Returns:
-            Repeated tensor of shape (batch_size, seq_len, num_heads, head_dim)
+            Repeated tensor of shape (batch_size, num_heads, seq_len, head_dim)
         """
-        batch_size, seq_len, num_kv_heads, head_dim = x.shape
-        
+        batch_size, num_kv_heads, seq_len, head_dim = x.shape
+
         if n_rep == 1:
             return x
-        
+
         # Repeat along the head dimension
-        x = x.unsqueeze(3).expand(batch_size, seq_len, num_kv_heads, n_rep, head_dim)
-        return x.reshape(batch_size, seq_len, num_kv_heads * n_rep, head_dim)
+        return x[:, :, None, :, :].expand(batch_size, num_kv_heads, n_rep, seq_len, head_dim).reshape(
+            batch_size, num_kv_heads * n_rep, seq_len, head_dim
+        )
     
     def forward(
         self,
@@ -143,38 +144,43 @@ class BitNetGQA2(nn.Module):
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
         
-        # Reshape for multi-head attention
-        query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim)
-        key_states = key_states.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
-        value_states = value_states.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
-        
-        # Apply RoPE
-        if position_ids is not None:
-            cos, sin = self.rotary_emb(value_states, position_ids)
-            query_states = self.rotary_emb.apply_rotary_pos_emb(query_states, cos, sin)
-            key_states = self.rotary_emb.apply_rotary_pos_emb(key_states, cos, sin)
-        
-        # Handle past key-value states for generation
+        # Reshape and transpose to (batch, heads, seq, dim) for RoPE and attention
+        query_states = query_states.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
+        # Apply RoPE (returns single rotated tensor, expects (batch, heads, seq, dim))
+        query_states = self.rotary_emb(query_states, seq_len=seq_len, position_ids=position_ids)
+        key_states = self.rotary_emb(key_states, seq_len=seq_len, position_ids=position_ids)
+
+        # Handle past key-value states for generation (dim=2 is seq dim in transposed layout)
         if past_key_value is not None:
             past_key, past_value = past_key_value
-            key_states = torch.cat([past_key, key_states], dim=1)
-            value_states = torch.cat([past_value, value_states], dim=1)
-        
-        # Repeat key and value for grouped query attention
+            key_states = torch.cat([past_key, key_states], dim=2)
+            value_states = torch.cat([past_value, value_states], dim=2)
+
+        # Repeat key and value for grouped query attention (already in (batch, heads, seq, dim) format)
         key_states = self._repeat_kv(key_states, self.num_queries_per_kv)
         value_states = self._repeat_kv(value_states, self.num_queries_per_kv)
-        
-        # Transpose for attention computation
-        query_states = query_states.transpose(1, 2)  # (batch_size, num_heads, seq_len, head_dim)
-        key_states = key_states.transpose(1, 2)       # (batch_size, num_heads, seq_len, head_dim)
-        value_states = value_states.transpose(1, 2)  # (batch_size, num_heads, seq_len, head_dim)
         
         # Compute attention scores
         attn_weights = torch.matmul(query_states, key_states.transpose(-2, -1)) * self.scale
         
         # Apply attention mask
         if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
+            # Reshape 2D/3D mask to 4D for broadcasting with (B, heads, seq_q, seq_k)
+            if attention_mask.dim() == 2:
+                attention_mask = attention_mask.unsqueeze(1).unsqueeze(1)
+            elif attention_mask.dim() == 3:
+                attention_mask = attention_mask.unsqueeze(1)
+
+            # Ensure mask covers key sequence length (may differ with past_key_value)
+            seq_len_k = key_states.size(2)
+            if attention_mask.size(-1) != seq_len_k:
+                attention_mask = F.pad(attention_mask, (0, seq_len_k - attention_mask.size(-1)), value=1.0)
+
+            # Convert binary (1=attend, 0=mask) to additive format
+            attn_weights = attn_weights + (1.0 - attention_mask) * -10000.0
         
         # Apply softmax
         attn_weights = F.softmax(attn_weights, dim=-1)

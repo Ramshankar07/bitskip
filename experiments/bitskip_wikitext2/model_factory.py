@@ -28,6 +28,8 @@ def create_model(exp_config):
         skip_probability=exp_config.dropout_probability_max,
         use_layer_skipping=exp_config.dropout_probability_max > 0,
 
+        early_exit_loss_weight=getattr(exp_config, 'early_exit_loss_weight', 0.3),
+
         # V2 auxiliary loss weights
         lambda_q=getattr(exp_config, 'lambda_q', 0.0),
         lambda_r=getattr(exp_config, 'lambda_r', 0.0),

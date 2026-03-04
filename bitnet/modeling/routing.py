@@ -126,7 +126,7 @@ class RoutingLoss(nn.Module):
             Routing loss tensor
         """
         if not p_exit_list:
-            return torch.tensor(0.0, device=next(self.parameters()).device)
+            return torch.tensor(0.0)
         
         # Compute expected exit layer
         expected_exit_layer = self._compute_expected_exit_layer(p_exit_list, layer_weights)

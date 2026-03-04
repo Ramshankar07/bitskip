@@ -15,6 +15,13 @@ Usage:
 """
 
 import modal
+from pathlib import Path
+
+# Paths relative to this script so they work from repo root or experiments/
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent
+_BITNET_DIR = _REPO_ROOT / "bitnet"
+_WIKITEXT2_DIR = _SCRIPT_DIR / "bitskip_wikitext2"
 
 # ---------------------------------------------------------------------------
 # Modal infrastructure
@@ -33,6 +40,8 @@ image = (
         "wandb>=0.15.0",
         "huggingface_hub>=0.19.0",
     )
+    .add_local_dir(str(_BITNET_DIR), "/root/bitnet")
+    .add_local_dir(str(_WIKITEXT2_DIR), "/root/experiments/bitskip_wikitext2")
 )
 
 vol = modal.Volume.from_name("bitskip-data", create_if_missing=True)
@@ -48,14 +57,7 @@ app = modal.App("bitskip-training", image=image)
     gpu="B200",
     timeout=86400,  # 24h max
     volumes={"/data": vol},
-    secrets=[modal.Secret.from_name("wandb-secret", required=False)],
-    mounts=[
-        modal.Mount.from_local_dir("./bitnet", remote_path="/root/bitnet"),
-        modal.Mount.from_local_dir(
-            "./experiments/bitskip_wikitext2",
-            remote_path="/root/experiments/bitskip_wikitext2",
-        ),
-    ],
+    secrets=[modal.Secret.from_name("huggingface-secret")],
 )
 def train(
     model_id: str = "bitskip_modal_run",

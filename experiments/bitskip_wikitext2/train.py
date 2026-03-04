@@ -64,6 +64,13 @@ def parse_args():
     parser.add_argument("--eval_every_steps", type=int, default=None, help="Evaluation frequency")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile to speed up training")
 
+    # Optimizer
+    parser.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "muon"],
+                        help="Optimizer: adamw or muon (Muon for 2D weights + AdamW for rest)")
+    parser.add_argument("--muon_lr", type=float, default=0.02, help="Muon learning rate")
+    parser.add_argument("--muon_momentum", type=float, default=0.95, help="Muon momentum")
+    parser.add_argument("--muon_ns_steps", type=int, default=5, help="Newton-Schulz iterations for Muon")
+
     # Logging
     parser.add_argument("--wandb", action="store_true", help="Enable wandb logging")
     parser.add_argument("--wandb_project", type=str, default="bitskip-v2", help="wandb project name")
@@ -274,6 +281,10 @@ def main():
     config.batch_size = args.batch_size
     config.gradient_accumulation_steps = args.gradient_accumulation_steps
     config.learning_rate = args.learning_rate
+    config.optimizer = args.optimizer
+    config.muon_lr = args.muon_lr
+    config.muon_momentum = args.muon_momentum
+    config.muon_ns_steps = args.muon_ns_steps
     config.seed = args.seed
     if args.num_steps is not None:
         config.num_steps = args.num_steps
@@ -325,14 +336,29 @@ def main():
             logger.warning("torch.compile is not available in this version of PyTorch. Skipping compilation.")
     
     # Optimizer & Scheduler
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.1)
-    
+    if config.optimizer == "muon":
+        from bitnet.optim.muon import SingleDeviceMuon, MuonWithAdamW, build_muon_param_groups
+        muon_params, adamw_params = build_muon_param_groups(model, verbose=True)
+        logger.info(f"Muon optimizer: {len(muon_params)} Muon params, {len(adamw_params)} AdamW params")
+        _muon = SingleDeviceMuon(
+            muon_params, lr=config.muon_lr,
+            momentum=config.muon_momentum, ns_steps=config.muon_ns_steps,
+            weight_decay=config.muon_weight_decay,
+        )
+        _adamw = torch.optim.AdamW(adamw_params, lr=config.learning_rate, weight_decay=0.1)
+        optimizer = MuonWithAdamW(_muon, _adamw)
+        # Scheduler on AdamW only (Muon LR is constant)
+        scheduler_optimizer = optimizer.adamw
+    else:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=0.1)
+        scheduler_optimizer = optimizer
+
     # Initialize scaler for AMP
     scaler = torch.amp.GradScaler('cuda') if torch.cuda.is_available() else None
-    
+
     num_training_steps = config.num_steps
     scheduler = get_cosine_schedule_with_warmup(
-        optimizer, num_warmup_steps=config.warmup_steps, num_training_steps=num_training_steps
+        scheduler_optimizer, num_warmup_steps=config.warmup_steps, num_training_steps=num_training_steps
     )
     
     # Early stopping state
@@ -384,7 +410,28 @@ def main():
                     loss.backward()
 
                 if (global_step + 1) % config.gradient_accumulation_steps == 0:
-                    if scaler is not None:
+                    if config.optimizer == "muon" and scaler is not None:
+                        # Unscale AdamW grads via scaler
+                        scaler.unscale_(optimizer.adamw)
+                        # Manually unscale Muon grads (scaler doesn't know about them)
+                        inv_scale = 1.0 / scaler.get_scale()
+                        for p in optimizer.muon.param_groups[0]["params"]:
+                            if p.grad is not None:
+                                p.grad.mul_(inv_scale)
+                        # Gradient clipping on all params
+                        all_params = [p for g in optimizer.param_groups for p in g["params"]]
+                        torch.nn.utils.clip_grad_norm_(all_params, 1.0)
+                        # Check for non-finite grads before Muon step
+                        muon_grads_finite = all(
+                            torch.isfinite(p.grad).all()
+                            for p in optimizer.muon.param_groups[0]["params"]
+                            if p.grad is not None
+                        )
+                        if muon_grads_finite:
+                            optimizer.muon.step()
+                        scaler.step(optimizer.adamw)
+                        scaler.update()
+                    elif scaler is not None:
                         scaler.unscale_(optimizer)
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                         scaler.step(optimizer)
@@ -452,7 +499,7 @@ def main():
                     if val_ppl < best_val_ppl - config.min_delta:
                         best_val_ppl = val_ppl
                         patience_counter = 0
-                        best_model_state = model.state_dict().copy()
+                        best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
                         logger.info(f"New best validation PPL: {best_val_ppl:.2f}")
                         # Save best model
                         save_file(best_model_state, os.path.join(run_dir, "model.safetensors"))

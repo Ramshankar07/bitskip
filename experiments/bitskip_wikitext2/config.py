@@ -37,6 +37,11 @@ class ExperimentConfig:
     batch_size: int = 8
     gradient_accumulation_steps: int = 4
     learning_rate: float = 6e-4
+    optimizer: str = "adamw"          # "adamw" or "muon"
+    muon_lr: float = 0.02             # Muon learning rate
+    muon_momentum: float = 0.95       # Muon momentum
+    muon_ns_steps: int = 5            # Newton-Schulz iterations
+    muon_weight_decay: float = 0.0    # Muon weight decay
     num_steps: int = 100
     warmup_steps: int = 10
     seed: int = 42

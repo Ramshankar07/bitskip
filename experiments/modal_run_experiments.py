@@ -5,16 +5,16 @@ Runs multiple experiments concurrently on Modal using B200 GPUs.
 
 Usage:
     # Run all v2 ablation stages
-    modal run experiments/modal_run_experiments.py
+    modal run experiments/modal_run_experiments.py::app.run_experiments
 
     # Run specific stage
-    modal run experiments/modal_run_experiments.py --stage 1
+    modal run experiments/modal_run_experiments.py::app.run_experiments --stage 1
 
     # Dry run to see what would be executed
-    modal run experiments/modal_run_experiments.py --dry-run
+    modal run experiments/modal_run_experiments.py::app.run_experiments --dry-run
 
     # With wandb
-    modal run experiments/modal_run_experiments.py --wandb
+    modal run experiments/modal_run_experiments.py::app.run_experiments --wandb
 """
 
 import modal
@@ -107,7 +107,7 @@ def build_experiments(stage: int, best_lambda_r: float = 0.05, best_lambda_q: fl
     return experiments
 
 
-@app.local_entrypoint()
+@app.local_entrypoint(name="run_experiments")
 def main(
     stage: int = 0,
     best_lambda_r: float = 0.05,

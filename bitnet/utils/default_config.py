@@ -51,7 +51,9 @@ class DefaultConfig:
     min_layers_to_keep: int = 4  # Appropriate for 12-layer model
     use_early_exit: bool = True
     early_exit_threshold: float = 0.95
+    early_exit_loss_weight: float = 0.3
     dropout_schedule: str = "quadratic"  # quadratic, linear, uniform
+    debug_nan_checks: bool = False
     
     # Training
     learning_rate: float = 5e-5

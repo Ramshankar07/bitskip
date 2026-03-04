@@ -59,8 +59,20 @@ class BitTransformerBlock2(nn.Module):
             hidden_size=config.hidden_size,
             dropout=config.hidden_dropout_prob
         )
-    
-    
+
+    def get_routing_decision(self, hidden_states: torch.Tensor, training: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Get routing decision for early exit.
+
+        Args:
+            hidden_states: Input hidden states
+            training: Whether in training mode
+
+        Returns:
+            p_exit: Exit probabilities
+            z_exit: Binary exit decisions
+        """
+        return self.routing_module(hidden_states, training=training)
 
     def forward(
         self,
@@ -106,7 +118,7 @@ class BitTransformerBlock2(nn.Module):
                 attn_output = attn_outputs
                 present_key_value = None
             
-            if attn_output is not None and (torch.isnan(attn_output).any().item() or torch.isinf(attn_output).any().item()):
+            if getattr(self, '_debug_nan_checks', False) and (torch.isnan(attn_output).any().item() or torch.isinf(attn_output).any().item()):
                 print(f"ERROR: NaN/Inf detected in attn_output!")
             
             # Apply dropout to attention output
@@ -115,7 +127,7 @@ class BitTransformerBlock2(nn.Module):
             # Apply sublayer norm with residual connection
             hidden_states = self.self_attn_norm(attn_output, residual)
             
-            if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
+            if getattr(self, '_debug_nan_checks', False) and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
                 print(f"ERROR: NaN/Inf detected in hidden_states after self_attn_norm!")
             
             # Store new residual
@@ -124,7 +136,7 @@ class BitTransformerBlock2(nn.Module):
             # Feed forward
             ff_output = self.feed_forward(hidden_states)
             
-            if ff_output is not None and (torch.isnan(ff_output).any().item() or torch.isinf(ff_output).any().item()):
+            if getattr(self, '_debug_nan_checks', False) and (torch.isnan(ff_output).any().item() or torch.isinf(ff_output).any().item()):
                 print(f"ERROR: NaN/Inf detected in ff_output!")
             
             # Apply dropout to feed-forward output
@@ -133,7 +145,7 @@ class BitTransformerBlock2(nn.Module):
             # Apply sublayer norm with residual connection
             hidden_states = self.feed_forward_norm(ff_output, residual)
             
-            if hidden_states is not None and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
+            if getattr(self, '_debug_nan_checks', False) and (torch.isnan(hidden_states).any().item() or torch.isinf(hidden_states).any().item()):
                 print(f"ERROR: NaN/Inf detected in final hidden_states!")
             
             
