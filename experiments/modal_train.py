@@ -83,6 +83,13 @@ def train(
     # Compilation
     compile: bool = True,
     compile_mode: str = "default",
+    # Mixed precision
+    use_amp: bool = True,
+    # Diagnostics
+    disable_quantization: bool = False,
+    disable_hadamard: bool = False,
+    h_init_scale: float = 0.1,
+    run_fwht_test: bool = False,
     # Logging
     wandb_enabled: bool = False,
     wandb_project: str = "bitskip-v2",
@@ -140,6 +147,9 @@ def train(
 
     config.lambda_q = lambda_q
     config.lambda_r = lambda_r
+    config.disable_quantization = disable_quantization
+    config.disable_hadamard = disable_hadamard
+    config.h_init_scale = h_init_scale
     config.batch_size = batch_size
     config.gradient_accumulation_steps = gradient_accumulation_steps
     config.learning_rate = learning_rate
@@ -224,8 +234,49 @@ def train(
     )
 
     # -----------------------------------------------------------------------
+    # FWHT unit test (runs on GPU before training if requested)
+    # -----------------------------------------------------------------------
+    if run_fwht_test:
+        device = torch.device("cuda")
+        from bitnet.modeling.kernels import fwht as fwht_fn
+        print("\n=== FWHT Unit Test ===")
+        all_passed = True
+        for n in [64, 128, 256, 512, 1024, 2048]:
+            x = torch.randn(4, 32, n, device=device)
+            y = fwht_fn(fwht_fn(x))
+            max_err = (y - x).abs().max().item()
+            rel_err = max_err / x.abs().max().item()
+            status = "PASS" if rel_err < 1e-4 else "FAIL"
+            if status == "FAIL":
+                all_passed = False
+            print(f"  n={n:5d}: H(H(x))==x  max_err={max_err:.2e}  rel_err={rel_err:.2e}  [{status}]")
+
+        x32 = torch.randn(4, 32, 512, device=device, dtype=torch.float32)
+        x16 = x32.half()
+        y32 = fwht_fn(fwht_fn(x32))
+        y16 = fwht_fn(fwht_fn(x16))
+        err32 = (y32 - x32).abs().max().item()
+        err16 = (y16.float() - x32).abs().max().item()
+        print(f"  fp32 roundtrip err: {err32:.2e}")
+        print(f"  fp16 roundtrip err: {err16:.2e}")
+        print(f"  fp16/fp32 ratio:    {err16/max(err32, 1e-12):.1f}x")
+
+        x_stats = torch.randn(2, 16, 512, device=device)
+        h_x = fwht_fn(x_stats)
+        print(f"\n  Input  stats: mean={x_stats.mean():.4f} std={x_stats.std():.4f} max={x_stats.abs().max():.4f}")
+        print(f"  H(x)   stats: mean={h_x.mean():.4f} std={h_x.std():.4f} max={h_x.abs().max():.4f}")
+        print(f"  L2 preserved: input={x_stats.norm():.4f} output={h_x.norm():.4f} ratio={h_x.norm()/x_stats.norm():.6f}")
+        print(f"=== FWHT Test {'PASSED' if all_passed else 'FAILED'} ===\n")
+
+    # -----------------------------------------------------------------------
     # Model
     # -----------------------------------------------------------------------
+    if disable_quantization:
+        print("*** DIAGNOSTIC: quantization DISABLED in HBitLinear (FWHT-only mode) ***")
+    if disable_hadamard:
+        print("*** DIAGNOSTIC: ALL Hadamard transforms DISABLED (pure LayerNorm → Linear) ***")
+    if h_init_scale != 0.1:
+        print(f"*** DIAGNOSTIC: HBitLinear init_scale={h_init_scale} (default 0.1) ***")
     print(f"Creating model (hadamard={use_hadamard}, precision={precision})...")
     model = create_model(config)
     device = torch.device("cuda")
@@ -248,10 +299,11 @@ def train(
     # Optimizer
     # -----------------------------------------------------------------------
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.1)
-    scaler = torch.amp.GradScaler("cuda")
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, num_warmup_steps=min(100, num_steps // 10), num_training_steps=num_steps
     )
+    print(f"Mixed precision (AMP): {'enabled' if use_amp else 'DISABLED (full float32)'}")
 
     # -----------------------------------------------------------------------
     # Training loop
@@ -277,7 +329,7 @@ def train(
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
 
-            with torch.amp.autocast("cuda"):
+            with torch.amp.autocast("cuda", enabled=use_amp):
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -386,6 +438,187 @@ def train(
 
 
 # ---------------------------------------------------------------------------
+# Weight analysis + 1.5-bit conversion (inline for Modal, no script dependency)
+# ---------------------------------------------------------------------------
+
+_QUANTIZABLE_SUFFIXES = (
+    "q_proj.weight",
+    "k_proj.weight",
+    "v_proj.weight",
+    "o_proj.weight",
+    "up_proj.weight",
+    "down_proj.weight",
+)
+
+
+def _is_quantizable_key(key: str) -> bool:
+    return key.endswith(_QUANTIZABLE_SUFFIXES) and "weight_scale" not in key
+
+
+def _ternary_quantize(w):
+    import torch
+    scale = float(w.abs().mean().clamp(min=1e-8))
+    w_q = torch.zeros_like(w)
+    w_q[w > 0.5 * scale] = 1.0
+    w_q[w < -0.5 * scale] = -1.0
+    n = w.numel()
+    return w_q * scale, scale, {
+        "scale": scale,
+        "sparsity": (w_q == 0).sum().item() / n,
+        "frac_pos": (w > 0.5 * scale).sum().item() / n,
+        "frac_neg": (w < -0.5 * scale).sum().item() / n,
+    }
+
+
+def _analyze_weights(state_dict):
+    import torch
+    layers, all_stats = [], []
+    for key in sorted(state_dict.keys()):
+        if not _is_quantizable_key(key):
+            continue
+        w = state_dict[key].float()
+        _, scale, stats = _ternary_quantize(w)
+        layers.append({"key": key, "numel": w.numel(), **stats})
+        all_stats.append(stats)
+    summary = {}
+    if all_stats:
+        summary = {
+            "quantizable_keys": len(layers),
+            "total_quantizable_params": sum(e["numel"] for e in layers),
+            "mean_scale": sum(s["scale"] for s in all_stats) / len(all_stats),
+            "mean_sparsity": sum(s["sparsity"] for s in all_stats) / len(all_stats),
+        }
+    return {"layers": layers, "summary": summary}
+
+
+def _convert_to_1_5bit(state_dict):
+    import torch
+    out = {}
+    for key, value in state_dict.items():
+        if not _is_quantizable_key(key):
+            out[key] = value.detach().clone()
+            continue
+        w = value.float()
+        w_q, scale, _ = _ternary_quantize(w)
+        out[key] = w_q.to(value.dtype if value.dtype != torch.float16 else torch.float32)
+        scale_key = key.replace(".weight", ".weight_scale")
+        out[scale_key] = torch.tensor(scale, dtype=torch.float32)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Push to Hugging Face (analysis + 1.5-bit + upload)
+# ---------------------------------------------------------------------------
+
+
+@app.function(
+    volumes={"/data": vol},
+    secrets=[modal.Secret.from_name("huggingface-secret")],
+)
+def push_to_huggingface(
+    model_id: str,
+    repo_id: str,
+    private: bool = False,
+    upload_1_5bit: bool = True,
+):
+    """
+    Load best checkpoint from /data/results/{model_id}/, run weight insights,
+    optionally build 1.5-bit state dict, and upload to Hugging Face.
+
+    Requires Modal secret "huggingface-secret" with HF_TOKEN (or HUGGINGFACE_TOKEN).
+    """
+    import os
+    import json
+    import tempfile
+    from pathlib import Path
+    from safetensors.torch import load_file, save_file
+    from huggingface_hub import HfApi, create_repo, upload_folder
+
+    token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    if not token:
+        return {"ok": False, "error": "HF_TOKEN or HUGGINGFACE_TOKEN not set"}
+
+    run_dir = Path(f"/data/results/{model_id}")
+    ckpt_path = run_dir / "model.safetensors"
+    results_path = run_dir / "results.txt"
+
+    if not ckpt_path.exists():
+        return {"ok": False, "error": f"Checkpoint not found: {ckpt_path}"}
+
+    state_dict = load_file(str(ckpt_path))
+    insights = _analyze_weights(state_dict)
+    insights_json = json.dumps(insights, indent=2)
+
+    results_text = ""
+    if results_path.exists():
+        results_text = results_path.read_text()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        save_file(state_dict, str(tmp / "model.safetensors"))
+        (tmp / "weight_insights.json").write_text(insights_json)
+
+        if upload_1_5bit:
+            state_1_5bit = _convert_to_1_5bit(state_dict)
+            save_file(state_1_5bit, str(tmp / "model_1.5bit.safetensors"))
+
+        embed_key = next((k for k in state_dict if "embed_tokens.weight" in k), None)
+        hidden_size = int(state_dict[embed_key].shape[1]) if embed_key else 512
+        config = {
+            "model_type": "bitskip",
+            "model_id": model_id,
+            "vocab_size": 50257,
+            "hidden_size": hidden_size,
+        }
+        (tmp / "config.json").write_text(json.dumps(config, indent=2))
+
+        readme = f"""---
+license: apache-2.0
+tags:
+- bitnet
+- bitskip
+- quantization
+- causal-lm
+---
+
+# BitSkip – {model_id}
+
+Trained with BitSkip (WikiText-2). Best checkpoint uploaded.
+
+## Files
+
+- `model.safetensors` – full-precision checkpoint
+- `model_1.5bit.safetensors` – ternary (1.5-bit) weights + scales
+- `weight_insights.json` – ternary distribution and scale stats
+- `config.json` – model config
+
+## Results
+
+```
+{results_text}
+```
+
+## Weight insights (summary)
+
+```json
+{json.dumps(insights["summary"], indent=2)}
+```
+"""
+        (tmp / "README.md").write_text(readme)
+
+        api = HfApi(token=token)
+        create_repo(repo_id=repo_id, private=private, exist_ok=True)
+        upload_folder(
+            folder_path=str(tmp),
+            repo_id=repo_id,
+            repo_type="model",
+            token=token,
+        )
+
+    return {"ok": True, "repo_id": repo_id, "summary": insights["summary"]}
+
+
+# ---------------------------------------------------------------------------
 # CLI entrypoint
 # ---------------------------------------------------------------------------
 
@@ -411,6 +644,11 @@ def main(
     seed: int = 42,
     compile: bool = True,
     compile_mode: str = "default",
+    use_amp: bool = True,
+    disable_quantization: bool = False,
+    disable_hadamard: bool = False,
+    h_init_scale: float = 0.1,
+    run_fwht_test: bool = False,
     wandb: bool = False,
     wandb_project: str = "bitskip-v2",
 ):
@@ -434,7 +672,171 @@ def main(
         seed=seed,
         compile=compile,
         compile_mode=compile_mode,
+        use_amp=use_amp,
+        disable_quantization=disable_quantization,
+        disable_hadamard=disable_hadamard,
+        h_init_scale=h_init_scale,
+        run_fwht_test=run_fwht_test,
         wandb_enabled=wandb,
         wandb_project=wandb_project,
     )
     print(f"\nResults: {result}")
+
+
+# Default Hugging Face username for push_to_hf from composition
+HF_USERNAME = "Ram07"
+
+
+@app.local_entrypoint(name="composition")
+def run_composition(
+    model_size: str = "85M_H",
+    num_steps: int = 500,
+    eval_every_steps: int = 50,
+    batch_size: int = 16,
+    learning_rate: float = 6e-4,
+    seed: int = 42,
+    wandb: bool = False,
+    wandb_project: str = "bitskip-v2",
+    push_to_hf: bool = True,
+):
+    """
+    Run the 4-way composition ablation: Baseline, H-only, EE-only, BitSkip (H+EE).
+    Then, if push_to_hf is True, push each model to Hugging Face (Ram07/{model_id}, private).
+
+    Uses best hyperparameters from benchmarks:
+      lambda_r=0.2, lambda_q=0.05, p_max=0.7, early_exit_lambda=0.3
+
+    Usage:
+        modal run modal_train.py::app.composition
+        modal run modal_train.py::app.composition --num-steps 1000
+        modal run modal_train.py::app.composition --no-push-to-hf   # skip HF upload
+    """
+    BEST = dict(
+        lambda_r=0.2,
+        lambda_q=0.05,
+        early_exit_lambda=0.3,
+        p_max=0.7,
+        dropout_schedule="quadratic",
+    )
+
+    experiments = [
+        {
+            "model_id": f"comp_baseline_s{seed}",
+            "use_hadamard": False,
+            "no_early_exit": True,
+            **{k: 0.0 for k in ("lambda_r", "lambda_q", "early_exit_lambda", "p_max")},
+            "dropout_schedule": "quadratic",
+            "label": "Baseline (no H, no EE)",
+        },
+        {
+            "model_id": f"comp_H_only_s{seed}",
+            "use_hadamard": True,
+            "no_early_exit": True,
+            **{k: 0.0 for k in ("lambda_r", "lambda_q", "early_exit_lambda", "p_max")},
+            "dropout_schedule": "quadratic",
+            "label": "H-only (Hadamard, no EE)",
+        },
+        {
+            "model_id": f"comp_EE_only_s{seed}",
+            "use_hadamard": False,
+            "no_early_exit": False,
+            **BEST,
+            "label": "EE-only (no Hadamard, early exit)",
+        },
+        {
+            "model_id": f"comp_BitSkip_s{seed}",
+            "use_hadamard": True,
+            "no_early_exit": False,
+            **BEST,
+            "label": "BitSkip (H + EE)",
+        },
+    ]
+
+    shared = dict(
+        model_size=model_size,
+        dataset="wikitext2",
+        precision="int8",
+        batch_size=batch_size,
+        gradient_accumulation_steps=1,
+        learning_rate=learning_rate,
+        num_steps=num_steps,
+        eval_every_steps=eval_every_steps,
+        seed=seed,
+        compile=True,
+        compile_mode="default",
+        use_amp=True,
+        disable_quantization=False,
+        disable_hadamard=False,
+        h_init_scale=0.1,
+        run_fwht_test=False,
+        wandb_enabled=wandb,
+        wandb_project=wandb_project,
+    )
+
+    print("=" * 70)
+    print("BitSkip Composition Ablation")
+    print(f"Model: {model_size} | Steps: {num_steps} | Seed: {seed}")
+    print("=" * 70)
+
+    results = []
+    for exp in experiments:
+        label = exp.pop("label")
+        params = {**shared, **exp}
+        print(f"\n>>> Running: {label} ({exp['model_id']})")
+        result = train.remote(**params)
+        result["label"] = label
+        results.append(result)
+        print(f"    Result: PPL={result['best_val_ppl']:.2f} (steps={result['steps']})")
+
+    print("\n" + "=" * 70)
+    print("COMPOSITION ABLATION RESULTS")
+    print("=" * 70)
+    print(f"{'Config':<35} {'Best Val PPL':>12} {'Steps':>6}")
+    print("-" * 55)
+    for r in results:
+        print(f"{r['label']:<35} {r['best_val_ppl']:>12.2f} {r['steps']:>6}")
+    print("=" * 70)
+
+    if push_to_hf:
+        print("\n" + "=" * 70)
+        print("Pushing to Hugging Face (private repos)")
+        print("=" * 70)
+        for r in results:
+            mid = r["model_id"]
+            repo_id = f"{HF_USERNAME}/{mid}"
+            print(f">>> Pushing {mid} -> {repo_id} ...")
+            out = push_to_huggingface.remote(
+                model_id=mid,
+                repo_id=repo_id,
+                private=True,
+                upload_1_5bit=True,
+            )
+            if out.get("ok"):
+                print(f"    OK: {repo_id}")
+            else:
+                print(f"    Failed: {out.get('error', out)}")
+        print("=" * 70)
+
+
+@app.local_entrypoint(name="push_to_hf")
+def run_push_to_hf(
+    model_id: str,
+    repo_id: str,
+    private: bool = False,
+    upload_1_5bit: bool = True,
+):
+    """
+    Run weight analysis, build 1.5-bit checkpoint, and push to Hugging Face.
+
+    Requires Modal secret "huggingface-secret" with HF_TOKEN.
+
+    Usage:
+        modal run modal_train.py::app.push_to_hf --model-id comp_baseline_s42 --repo-id username/bitskip-85M
+    """
+    result = push_to_huggingface.remote(
+        model_id=model_id,
+        repo_id=repo_id,
+        private=private,
+        upload_1_5bit=upload_1_5bit,
+    )
+    print("Result:", result)

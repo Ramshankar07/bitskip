@@ -13,12 +13,38 @@
 | Run 1 (pre-fix) | 125M (768h) | None (no causal mask) | ~16 (invalid) | ~1,794 | Collapsed |
 | Run 2 | 125M (768h) | Causal mask + H-BitLinear fixes | **251.11** | ~1,494 | Collapsed |
 | Run 3 | 85M_H (512h) | activation_bits fix + power-of-2 dims | **252.93** | ~1,491 | Collapsed (unchanged) |
+| Run 4 | 85M_H (512h) | **squared_relu added to HBitLinear** | — | **957.03** | **Learning (fixed!)** |
 
-**Run 3 changes:**
-1. Fixed `activation_bits` not being passed to HBitLinear in `gqa_attention2.py` (all 4 projections defaulted to 4-bit instead of config's 8-bit).
-2. Switched from 125M (768 hidden, 12 heads, 3072 FFN) to **85M_H** (512 hidden, 8 heads, 2048 FFN) — all power-of-2 dimensions, eliminating FWHT padding entirely.
+**Run 4 — Root cause found and fixed:**
 
-Neither fix resolved the Hadamard collapse.
+The "Hadamard collapse" was caused by a **missing activation function** in `HBitLinear`. `BitLinear` (used by noH models) applies `squared_relu` at the end of every projection — including attention q/k/v/o. `HBitLinear` had no activation, causing every projection output to lack the non-linearity that the architecture relied on.
+
+**Fix:** Added `squared_relu` to the end of `HBitLinear.forward()`, matching `BitLinear`'s behavior.
+
+**Result:** H model PPL dropped from ~1,503 (collapsed) to **957** (early-stopped at step 400). The model is now genuinely learning. Gap to noH (254) remains — likely needs hyperparameter tuning and longer training now that the architecture is functional.
+
+**Diagnostic tests that isolated the root cause:**
+1. FWHT unit test: H(H(x))=x passed for all sizes (kernel is correct)
+2. H model with no quantization: still collapsed (quant not the cause)
+3. H model with no output FWHT + standard init: still collapsed (FWHT not the cause)
+4. H model with ALL Hadamard + quant disabled (HBitLinear = LayerNorm→Linear): **still collapsed** — proved the bug was in the Model2 architecture, not HBitLinear's special features
+5. Side-by-side diff of BitLinear vs HBitLinear revealed the missing `squared_relu`
+
+---
+
+## Run 4: squared_relu Fix (Root Cause of Hadamard Collapse)
+
+**Model:** 85M_H (512 hidden, 12 layers, 8 heads, 4 KV heads, 2048 FFN)
+**Fix:** Added `squared_relu` activation to the end of `HBitLinear.forward()`.
+
+| Experiment | H | Config | Seed | Best Val PPL | Final Val PPL | Steps | Notes |
+|---|---|---|---|---|---|---|---|
+| V2_sqrelu_fix_H_s42 | Yes | lambda_r=0.0, lambda_q=0.0 | 42 | **957.03** | **957.03** | 400 (early stop) | **No longer collapsed** |
+
+**Comparison (same config, lambda_r=0.0):**
+- noH (Run 3): Final Val PPL **254.56**
+- H before fix (Run 3): Final Val PPL **1,503.47** (collapsed)
+- H after fix (Run 4): Final Val PPL **957.03** (36% improvement, learning)
 
 ---
 
@@ -213,22 +239,20 @@ Fixed: lambda_r=best from Stage 1, sweep lambda_q.
 - Best config: route ON, p=0.7, lambda_r=0.2, lambda_q=0.05 -> **Final Val PPL 252.93**
 - Higher skip probability (p=0.7) consistently outperforms lower (p=0.2)
 
-### H Model (Collapsed — 3 runs, 5 fixes, no improvement)
+### H Model — Root Cause Found (Run 4)
 
-- ALL H-BitLinear experiments across Runs 1-3 collapsed to PPL ~1,490-1,800
-- Fixes attempted with no effect:
-  1. LayerNorm moved to unpadded dimensions
-  2. Hadamard applied before quantization (was reversed)
-  3. Weight init 0.1x scaling
-  4. `activation_bits` passed to GQA2 attention projections (Run 3)
-  5. Power-of-2 model dims via 85M_H (512h, 2048 FFN) — zero FWHT padding (Run 3)
-- route-OFF H variants show marginal Final Val PPL improvement (~1,491-1,566 vs ~1,790) suggesting slight learning
-- **Eliminated hypotheses:**
-  - ~~Non-power-of-2 padding corrupts the Hadamard rotation~~ — Run 3 used 85M_H (all power-of-2), still collapsed
-  - ~~activation_bits defaulting to 4-bit in attention~~ — fixed in Run 3, no effect
-- **Remaining hypotheses:**
-  - The FWHT kernel or inverse-FWHT implementation itself is incorrect
-  - Ternary weight quantization + Hadamard rotation combined is fundamentally unstable
-  - The HBitLinear forward pass order (norm → pad → FWHT → quant → linear → iFFWHT → unpad) has a logic error
-  - Learning rate / optimizer settings may need Hadamard-specific tuning
+- **Root cause:** `HBitLinear` was missing the `squared_relu` activation that `BitLinear` applies at the end of every projection. This meant all attention Q/K/V/O projections and FFN up/down projections lacked the non-linearity the architecture depends on.
+- **Fix:** Added `squared_relu` to the end of `HBitLinear.forward()` in `h_bitlinear.py`.
+- **Run 4 result:** H model PPL **957** (early-stopped at step 400) — down from ~1,503 (collapsed). The model is now learning.
+- **Remaining gap:** H model PPL 957 vs noH best PPL 252. Likely causes:
+  - The FWHT + quantization pipeline adds overhead that needs more steps or tuning
+  - The output FWHT (sandwich pattern) may still be suboptimal — the paper applies FWHT only to the input
+  - Hyperparameters (LR, batch size, steps) were tuned for noH and may not be optimal for H
+- **Eliminated hypotheses (during diagnosis):**
+  - ~~FWHT kernel bug~~ — H(H(x))=x unit test passed
+  - ~~fp16 precision~~ — full float32 also collapsed (before fix)
+  - ~~Quantization interaction~~ — no-quant mode also collapsed (before fix)
+  - ~~Non-power-of-2 padding~~ — 85M_H (all power-of-2) still collapsed (before fix)
+  - ~~Output FWHT (sandwich)~~ — input-only FWHT also collapsed (before fix)
+  - ~~Weight init scale~~ — standard Kaiming (1.0) also collapsed (before fix)
 

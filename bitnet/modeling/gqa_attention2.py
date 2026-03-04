@@ -38,7 +38,10 @@ class BitNetGQA2(nn.Module):
         num_kv_heads: int,
         dropout: float = 0.1,
         activation_bits: int = 8,
-        weight_bits: int = 2
+        weight_bits: int = 2,
+        disable_quantization: bool = False,
+        disable_hadamard: bool = False,
+        h_init_scale: float = 0.1,
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -57,32 +60,33 @@ class BitNetGQA2(nn.Module):
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError(f"num_heads ({num_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
         
+        hbl_kwargs = dict(bias=False, activation_bits=activation_bits,
+                          disable_quantization=disable_quantization,
+                          disable_hadamard=disable_hadamard,
+                          init_scale=h_init_scale)
+        
         self.q_proj = HBitLinear(
             in_features=hidden_size,
             out_features=hidden_size,
-            bias=False,
-            activation_bits=activation_bits,
+            **hbl_kwargs,
         )
         
         self.k_proj = HBitLinear(
             in_features=hidden_size,
             out_features=num_kv_heads * self.head_dim,
-            bias=False,
-            activation_bits=activation_bits,
+            **hbl_kwargs,
         )
         
         self.v_proj = HBitLinear(
             in_features=hidden_size,
             out_features=num_kv_heads * self.head_dim,
-            bias=False,
-            activation_bits=activation_bits,
+            **hbl_kwargs,
         )
         
         self.o_proj = HBitLinear(
             in_features=hidden_size,
             out_features=hidden_size,
-            bias=False,
-            activation_bits=activation_bits,
+            **hbl_kwargs,
         )
         
         # RoPE for positional encoding

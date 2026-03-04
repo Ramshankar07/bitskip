@@ -27,25 +27,25 @@ class BitFeedForward2(nn.Module):
         self.mlp_ratio = getattr(config, 'mlp_ratio', 2.0)  # Default to 2.0 for smaller model
         self.intermediate_size = int(self.hidden_size * self.mlp_ratio)
         self.activation_bits = config.activation_bits  # Get from config
+        self.disable_quantization = getattr(config, 'disable_quantization', False)
+        self.h_init_scale = getattr(config, 'h_init_scale', 0.1)
+        
+        self.disable_hadamard = getattr(config, 'disable_hadamard', False)
+        
+        hbl_kwargs = dict(
+            bias=False,
+            activation_bits=self.activation_bits,
+            disable_quantization=self.disable_quantization,
+            disable_hadamard=self.disable_hadamard,
+            init_scale=self.h_init_scale,
+        )
         
         # Log dimensions
-        logger.info(f"BitFeedForward2 initialized with hidden_size={self.hidden_size}, intermediate_size={self.intermediate_size} (mlp_ratio={self.mlp_ratio}), activation_bits={self.activation_bits}")
+        logger.info(f"BitFeedForward2: hidden={self.hidden_size}, inter={self.intermediate_size}, "
+                     f"bits={self.activation_bits}, init_scale={self.h_init_scale}")
         
-        # H-BitLinear layer for up projection
-        self.up_proj = HBitLinear(
-            self.hidden_size,
-            self.intermediate_size,
-            bias=False,
-            activation_bits=self.activation_bits
-        )
-        
-        # H-BitLinear layer for down projection
-        self.down_proj = HBitLinear(
-            self.intermediate_size,
-            self.hidden_size,
-            bias=False,
-            activation_bits=self.activation_bits
-        )
+        self.up_proj = HBitLinear(self.hidden_size, self.intermediate_size, **hbl_kwargs)
+        self.down_proj = HBitLinear(self.intermediate_size, self.hidden_size, **hbl_kwargs)
         
         # Dropout
         self.dropout = nn.Dropout(config.hidden_dropout_prob)

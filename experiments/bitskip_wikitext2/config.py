@@ -22,6 +22,9 @@ class ExperimentConfig:
     weight_bits: int = 8  # 16 (FP16), 8, 4
     activation_bits: int = 8
     use_hadamard: bool = False
+    disable_quantization: bool = False  # Diagnostic: keep FWHT but skip quant in HBitLinear
+    disable_hadamard: bool = False  # Diagnostic: disable FWHT entirely (pure LayerNorm → Linear)
+    h_init_scale: float = 0.1  # Weight init scale for HBitLinear (1.0 = standard Kaiming)
     
     # Early Exit / Layer Skipping
     use_early_exit: bool = False

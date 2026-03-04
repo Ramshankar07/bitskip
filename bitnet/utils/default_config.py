@@ -40,6 +40,9 @@ class DefaultConfig:
     # BitNet specific (BitSkip specifications)
     activation_bits: int = 8  # 8-bit activation quantization (BitSkip specification)
     weight_bits: int = 2  # Ternary quantization (BitSkip specification)
+    disable_quantization: bool = False  # Diagnostic: skip quant in HBitLinear, keep FWHT
+    disable_hadamard: bool = False  # Diagnostic: disable FWHT entirely (pure LayerNorm → Linear)
+    h_init_scale: float = 0.1  # Weight init scale for HBitLinear (1.0 = standard Kaiming)
     
     # Joint loss parameters for quantization and routing optimization
     lambda_q: float = 0.1  # Weight for quantization loss in joint optimization

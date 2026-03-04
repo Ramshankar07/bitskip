@@ -8,6 +8,10 @@ import torch.nn.functional as F
 from .kernels import fwht
 
 
+def squared_relu(x: torch.Tensor) -> torch.Tensor:
+    return torch.relu(x) ** 2
+
+
 def _next_power_of_2(n: int) -> int:
     """Return the next power of 2 greater than or equal to n."""
     if n <= 0:
@@ -42,6 +46,9 @@ class HBitLinear(nn.Module):
         out_features: int,
         bias: bool = False,
         activation_bits: int = 4,
+        disable_quantization: bool = False,
+        disable_hadamard: bool = False,
+        init_scale: float = 0.1,
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None
     ):
@@ -51,30 +58,29 @@ class HBitLinear(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
         self.activation_bits = activation_bits
+        self.disable_quantization = disable_quantization
+        self.disable_hadamard = disable_hadamard
 
-        # Calculate padded dimensions for FWHT (must be powers of 2)
+        # Padded input dimension for FWHT (must be power of 2)
         self.in_features_padded = _next_power_of_2(in_features)
-        self.out_features_padded = _next_power_of_2(out_features)
-        
-        # Calculate padding amounts
         self.in_pad = self.in_features_padded - in_features
-        self.out_pad = self.out_features_padded - out_features
 
-        # Initialize weights with padded dimensions
-        self.weight = nn.Parameter(torch.empty((self.out_features_padded, self.in_features_padded), **factory_kwargs))
+        # FWHT only on input; weights map from padded-input → out_features
+        weight_in = in_features if disable_hadamard else self.in_features_padded
+        self.weight = nn.Parameter(torch.empty((out_features, weight_in), **factory_kwargs))
         self.register_buffer('weight_scale', torch.ones(1, **factory_kwargs))
 
         if bias:
-            self.bias = nn.Parameter(torch.zeros(self.out_features_padded, **factory_kwargs))
+            self.bias = nn.Parameter(torch.zeros(out_features, **factory_kwargs))
         else:
             self.register_parameter('bias', None)
 
         # Layer Normalization on original (unpadded) dimension
         self.layer_norm = nn.LayerNorm(self.in_features, **factory_kwargs)
 
-        # Initialize weights with conservative scaling for quantized models
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
-        self.weight.data *= 0.1
+        if init_scale != 1.0:
+            self.weight.data *= init_scale
 
     def _weight_quantize(self, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -144,45 +150,45 @@ class HBitLinear(nn.Module):
         # LayerNorm on original (unpadded) dimensions
         x_ln = self.layer_norm(x)
 
+        if self.disable_hadamard:
+            x_flat = x_ln.view(-1, x_ln.shape[-1])
+            output_flat = F.linear(x_flat, self.weight, self.bias)
+            return squared_relu(output_flat.view(*original_shape[:-1], self.out_features))
+
         # Pad to power of 2 after LayerNorm
         if self.in_pad > 0:
             x_padded = F.pad(x_ln, (0, self.in_pad), mode='constant', value=0.0)
         else:
             x_padded = x_ln
 
-        # Hadamard transform first (smooths distribution for better quantization)
+        # Hadamard transform (smooths distribution for better quantization)
         x_h = hadamard_transform(x_padded)
 
-        # Activation fake-quant (per-token) with STE
-        bits = self.activation_bits
-        x_scale = x_h.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-5, max=1e5)
-        max_val = float((1 << (bits - 1)) - 1)
-        x_int = (x_h * max_val / x_scale).round().clamp(-max_val, max_val)
-        x_q = x_int * x_scale / max_val
-        if bool(self.training):
-            x_q = x_h + (x_q - x_h).detach()
+        if self.disable_quantization:
+            x_q = x_h
+            w_q = self.weight
+        else:
+            # Activation fake-quant (per-token) with STE
+            bits = self.activation_bits
+            x_scale = x_h.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-5, max=1e5)
+            max_val = float((1 << (bits - 1)) - 1)
+            x_int = (x_h * max_val / x_scale).round().clamp(-max_val, max_val)
+            x_q = x_int * x_scale / max_val
+            if bool(self.training):
+                x_q = x_h + (x_q - x_h).detach()
 
-        # Weight fake-quant (ternary) with STE
-        w_scale = self.weight.abs().mean().clamp(min=1e-5, max=1e5)
-        w_q = torch.zeros_like(self.weight)
-        w_q[self.weight > 0.5 * w_scale] = 1.0
-        w_q[self.weight < -0.5 * w_scale] = -1.0
-        w_q = w_q * w_scale
-        if bool(self.training):
-            w_q = self.weight + (w_q - self.weight).detach()
+            # Weight fake-quant (ternary) with STE
+            w_scale = self.weight.abs().mean().clamp(min=1e-5, max=1e5)
+            w_q = torch.zeros_like(self.weight)
+            w_q[self.weight > 0.5 * w_scale] = 1.0
+            w_q[self.weight < -0.5 * w_scale] = -1.0
+            w_q = w_q * w_scale
+            if bool(self.training):
+                w_q = self.weight + (w_q - self.weight).detach()
 
         # Linear on flattened last-dim, then reshape
         x_q_flat = x_q.view(-1, x_q.shape[-1])
         output_flat = F.linear(x_q_flat, w_q, self.bias)
-        output_padded = output_flat.view(*original_shape[:-1], self.out_features_padded)
+        output = output_flat.view(*original_shape[:-1], self.out_features)
 
-        # Inverse Hadamard
-        output_padded = hadamard_transform(output_padded)
-
-        # Unpad output back to original out_features
-        if self.out_pad > 0:
-            output = output_padded[..., :self.out_features]
-        else:
-            output = output_padded
-
-        return output
+        return squared_relu(output)

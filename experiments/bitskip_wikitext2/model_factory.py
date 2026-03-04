@@ -20,6 +20,9 @@ def create_model(exp_config):
         
         weight_bits=exp_config.weight_bits,
         activation_bits=exp_config.activation_bits,
+        disable_quantization=getattr(exp_config, 'disable_quantization', False),
+        disable_hadamard=getattr(exp_config, 'disable_hadamard', False),
+        h_init_scale=getattr(exp_config, 'h_init_scale', 0.1),
         
         use_early_exit=exp_config.use_early_exit,
         dropout_schedule=exp_config.dropout_schedule,

@@ -36,7 +36,10 @@ class BitTransformerBlock2(nn.Module):
             num_kv_heads=getattr(config, 'num_key_value_heads', getattr(config, 'num_kv_heads', 4)),
             dropout=getattr(config, 'attention_probs_dropout_prob', getattr(config, 'attention_dropout', 0.1)),
             activation_bits=self.activation_bits,
-            weight_bits=getattr(config, 'weight_bits', 2)
+            weight_bits=getattr(config, 'weight_bits', 2),
+            disable_quantization=getattr(config, 'disable_quantization', False),
+            disable_hadamard=getattr(config, 'disable_hadamard', False),
+            h_init_scale=getattr(config, 'h_init_scale', 0.1),
         )
         self.self_attn_norm = SublayerNormWithResidual(
             hidden_size=config.hidden_size,
