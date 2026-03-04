@@ -89,21 +89,6 @@ def build_experiments(stage: int, best_lambda_r: float = 0.05, best_lambda_q: fl
                         "dropout_schedule": PAPER_BEST["dropout_schedule"],
                     })
 
-    elif stage == 4:
-        # Stage V2-4: Golden config with 3 seeds
-        for seed in [42, 123, 456]:
-            for had in [True]:
-                had_tag = "H" if had else "noH"
-                experiments.append({
-                    "model_id": f"V2_Golden_int8_{had_tag}_s{seed}",
-                    "precision": "int8",
-                    "use_hadamard": had,
-                    "lambda_q": best_lambda_q,
-                    "lambda_r": best_lambda_r,
-                    "seed": seed,
-                    **PAPER_BEST,
-                })
-
     return experiments
 
 
@@ -114,14 +99,16 @@ def main(
     best_lambda_q: float = 0.0,
     dataset: str = "wikitext2",
     batch_size: int = 128,
-    num_steps: int = 5000,
+    num_steps: int = 500,
     eval_every_steps: int = 250,
     learning_rate: float = 6e-4,
+    compile: bool = True,
+    compile_mode: str = "default",
     wandb: bool = False,
     wandb_project: str = "bitskip-v2",
     dry_run: bool = False,
 ):
-    stages = [stage] if stage > 0 else [1, 2, 3, 4]
+    stages = [stage] if stage > 0 else [1, 2, 3]
 
     for s in stages:
         experiments = build_experiments(s, best_lambda_r, best_lambda_q)
@@ -154,6 +141,8 @@ def main(
                 num_steps=num_steps,
                 eval_every_steps=eval_every_steps,
                 seed=exp["seed"],
+                compile=compile,
+                compile_mode=compile_mode,
                 wandb_enabled=wandb,
                 wandb_project=wandb_project,
             )

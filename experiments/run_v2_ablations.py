@@ -56,6 +56,7 @@ class Experiment:
     lambda_q: float
     lambda_r: float
     seed: int = 42
+    model_size: str = "85M_H"
 
 
 def build_stage_v2_1(best_lambda_q: float = 0.0) -> List[Experiment]:
@@ -73,6 +74,7 @@ def build_stage_v2_1(best_lambda_q: float = 0.0) -> List[Experiment]:
                     lambda_q=best_lambda_q,
                     lambda_r=lr_val,
                     seed=42,
+                    model_size="85M_H",
                     **PAPER_BEST,
                 )
                 experiments.append(exp)
@@ -94,6 +96,7 @@ def build_stage_v2_2(best_lambda_r: float = 0.05) -> List[Experiment]:
                     lambda_q=lq_val,
                     lambda_r=best_lambda_r,
                     seed=42,
+                    model_size="85M_H",
                     **PAPER_BEST,
                 )
                 experiments.append(exp)
@@ -122,6 +125,7 @@ def build_stage_v2_3(
                         lambda_q=lq,
                         lambda_r=lr,
                         seed=42,
+                        model_size="85M_H",
                         early_exit_lambda=PAPER_BEST["early_exit_lambda"],
                         p_max=p_max,
                         dropout_schedule=PAPER_BEST["dropout_schedule"],
@@ -147,6 +151,7 @@ def build_stage_v2_4(
             lambda_q=best_lambda_q,
             lambda_r=best_lambda_r,
             seed=seed,
+            model_size="85M_H",
             early_exit_lambda=PAPER_BEST["early_exit_lambda"],
             p_max=best_p_max,
             dropout_schedule=PAPER_BEST["dropout_schedule"],
@@ -164,6 +169,7 @@ def run_experiment_local(exp: Experiment, output_dir: str, args) -> dict:
     cmd = [
         sys.executable, train_script,
         "--model_id", exp.model_id,
+        "--model_size", exp.model_size,
         "--output_dir", output_dir,
         "--dataset", args.dataset,
         "--precision", exp.precision,
@@ -212,6 +218,7 @@ def run_experiment_modal(exp: Experiment, args) -> dict:
     cmd = [
         "modal", "run", os.path.join(os.path.dirname(__file__), "modal_train.py"),
         "--model-id", exp.model_id,
+        "--model-size", exp.model_size,
         "--dataset", args.dataset,
         "--precision", exp.precision,
         "--early-exit-lambda", str(exp.early_exit_lambda),
@@ -228,6 +235,10 @@ def run_experiment_modal(exp: Experiment, args) -> dict:
 
     if exp.use_hadamard:
         cmd.append("--use-hadamard")
+    if args.compile:
+        cmd.extend(["--compile", "--compile-mode", args.compile_mode])
+    else:
+        cmd.append("--no-compile")
     if args.wandb:
         cmd.extend(["--wandb", "--wandb-project", args.wandb_project])
 
@@ -258,11 +269,14 @@ def parse_args():
                         choices=["wikitext2", "wikitext103", "ptb"])
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--learning_rate", type=float, default=6e-4)
-    parser.add_argument("--num_steps", type=int, default=2000)
-    parser.add_argument("--eval_every_steps", type=int, default=100)
+    parser.add_argument("--num_steps", type=int, default=500)
+    parser.add_argument("--eval_every_steps", type=int, default=50)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="bitskip-v2")
     parser.add_argument("--compile", action="store_true")
+    parser.add_argument("--compile_mode", type=str, default="default",
+                        choices=["default", "reduce-overhead", "max-autotune"],
+                        help="torch.compile mode (default: 'default')")
     parser.add_argument("--modal", action="store_true", help="Run experiments on Modal")
     parser.add_argument("--dry_run", action="store_true", help="Print experiments without running")
 

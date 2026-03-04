@@ -69,11 +69,12 @@ class HBitLinear(nn.Module):
         else:
             self.register_parameter('bias', None)
 
-        # Add Layer Normalization with padded dimension
-        self.layer_norm = nn.LayerNorm(self.in_features_padded, **factory_kwargs)
+        # Layer Normalization on original (unpadded) dimension
+        self.layer_norm = nn.LayerNorm(self.in_features, **factory_kwargs)
 
-        # Initialize weights using standard initialization
+        # Initialize weights with conservative scaling for quantized models
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        self.weight.data *= 0.1
 
     def _weight_quantize(self, w: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -140,26 +141,26 @@ class HBitLinear(nn.Module):
         expected_output_shape[-1] = self.out_features
         expected_output_shape = tuple(expected_output_shape)
 
-        # Pad input to power of 2 if needed
-        if self.in_pad > 0:
-            x_padded = F.pad(x, (0, self.in_pad), mode='constant', value=0.0)
-        else:
-            x_padded = x
+        # LayerNorm on original (unpadded) dimensions
+        x_ln = self.layer_norm(x)
 
-        # LayerNorm (on padded input)
-        x_ln = self.layer_norm(x_padded)
+        # Pad to power of 2 after LayerNorm
+        if self.in_pad > 0:
+            x_padded = F.pad(x_ln, (0, self.in_pad), mode='constant', value=0.0)
+        else:
+            x_padded = x_ln
+
+        # Hadamard transform first (smooths distribution for better quantization)
+        x_h = hadamard_transform(x_padded)
 
         # Activation fake-quant (per-token) with STE
         bits = self.activation_bits
-        x_scale = x_ln.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-5, max=1e5)
+        x_scale = x_h.abs().max(dim=-1, keepdim=True)[0].clamp(min=1e-5, max=1e5)
         max_val = float((1 << (bits - 1)) - 1)
-        x_int = (x_ln * max_val / x_scale).round().clamp(-max_val, max_val)
+        x_int = (x_h * max_val / x_scale).round().clamp(-max_val, max_val)
         x_q = x_int * x_scale / max_val
         if bool(self.training):
-            x_q = x_ln + (x_q - x_ln).detach()
-
-        # Hadamard transform on fake-quant activations (now power of 2)
-        x_h = hadamard_transform(x_q)
+            x_q = x_h + (x_q - x_h).detach()
 
         # Weight fake-quant (ternary) with STE
         w_scale = self.weight.abs().mean().clamp(min=1e-5, max=1e5)
@@ -171,8 +172,8 @@ class HBitLinear(nn.Module):
             w_q = self.weight + (w_q - self.weight).detach()
 
         # Linear on flattened last-dim, then reshape
-        x_h_flat = x_h.view(-1, x_h.shape[-1])
-        output_flat = F.linear(x_h_flat, w_q, self.bias)
+        x_q_flat = x_q.view(-1, x_q.shape[-1])
+        output_flat = F.linear(x_q_flat, w_q, self.bias)
         output_padded = output_flat.view(*original_shape[:-1], self.out_features_padded)
 
         # Inverse Hadamard

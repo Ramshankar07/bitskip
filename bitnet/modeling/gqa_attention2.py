@@ -57,32 +57,32 @@ class BitNetGQA2(nn.Module):
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError(f"num_heads ({num_heads}) must be divisible by num_kv_heads ({num_kv_heads})")
         
-        # Query projection using H-BitLinear (now supports arbitrary dimensions)
         self.q_proj = HBitLinear(
             in_features=hidden_size,
             out_features=hidden_size,
-            bias=False
+            bias=False,
+            activation_bits=activation_bits,
         )
         
-        # Key projection using H-BitLinear (smaller output for GQA)
         self.k_proj = HBitLinear(
             in_features=hidden_size,
             out_features=num_kv_heads * self.head_dim,
-            bias=False
+            bias=False,
+            activation_bits=activation_bits,
         )
         
-        # Value projection using H-BitLinear (smaller output for GQA)
         self.v_proj = HBitLinear(
             in_features=hidden_size,
             out_features=num_kv_heads * self.head_dim,
-            bias=False
+            bias=False,
+            activation_bits=activation_bits,
         )
         
-        # Output projection using H-BitLinear
         self.o_proj = HBitLinear(
             in_features=hidden_size,
             out_features=hidden_size,
-            bias=False
+            bias=False,
+            activation_bits=activation_bits,
         )
         
         # RoPE for positional encoding
@@ -165,7 +165,16 @@ class BitNetGQA2(nn.Module):
         
         # Compute attention scores
         attn_weights = torch.matmul(query_states, key_states.transpose(-2, -1)) * self.scale
-        
+
+        # Causal mask: prevent attending to future positions
+        if seq_len > 1:
+            seq_len_k = key_states.size(2)
+            causal_mask = torch.triu(
+                torch.ones(seq_len, seq_len_k, dtype=torch.bool, device=query_states.device),
+                diagonal=seq_len_k - seq_len + 1,
+            )
+            attn_weights.masked_fill_(causal_mask, float("-inf"))
+
         # Apply attention mask
         if attention_mask is not None:
             # Reshape 2D/3D mask to 4D for broadcasting with (B, heads, seq_q, seq_k)

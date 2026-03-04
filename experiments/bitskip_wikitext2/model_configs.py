@@ -12,6 +12,13 @@ MODEL_CONFIGS = {
         "intermediate_size": 3072,
         "description": "~125M parameters, trainable in ~8 hours on single GPU"
     },
+    "85M_H": {
+        "hidden_size": 512,
+        "num_hidden_layers": 12,
+        "num_attention_heads": 8,
+        "intermediate_size": 2048,
+        "description": "~85M params, all dims power-of-2 for H-BitLinear (no FWHT padding)"
+    },
 }
 
 # Paper terminology mapping for clarity

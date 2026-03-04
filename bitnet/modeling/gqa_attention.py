@@ -134,7 +134,15 @@ class BitNetGQA(nn.Module):
         # k shape: (batch_size, num_heads, seq_len_k, head_dim)
         # attn_scores shape: (batch_size, num_heads, seq_len_q, seq_len_k)
         attn_scores = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        
+
+        # Causal mask: prevent attending to future positions
+        if seq_len_q > 1:
+            causal_mask = torch.triu(
+                torch.ones(seq_len_q, seq_len_k, dtype=torch.bool, device=q.device),
+                diagonal=seq_len_k - seq_len_q + 1,
+            )
+            attn_scores.masked_fill_(causal_mask, float("-inf"))
+
         # Apply attention mask if provided
         if attention_mask is not None:
             # Get the key sequence length

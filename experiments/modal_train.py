@@ -61,6 +61,7 @@ app = modal.App("bitskip-training", image=image)
 )
 def train(
     model_id: str = "bitskip_modal_run",
+    model_size: str = "125M",
     dataset: str = "wikitext2",
     precision: str = "int8",
     use_hadamard: bool = False,
@@ -76,9 +77,12 @@ def train(
     batch_size: int = 128,
     gradient_accumulation_steps: int = 1,
     learning_rate: float = 6e-4,
-    num_steps: int = 5000,
+    num_steps: int = 500,
     eval_every_steps: int = 250,
     seed: int = 42,
+    # Compilation
+    compile: bool = True,
+    compile_mode: str = "default",
     # Logging
     wandb_enabled: bool = False,
     wandb_project: str = "bitskip-v2",
@@ -112,7 +116,7 @@ def train(
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    config = ExperimentConfig(model_size="125M")
+    config = ExperimentConfig(model_size=model_size)
     config.dataset = dataset
 
     if precision == "fp16":
@@ -228,9 +232,14 @@ def train(
     model.to(device)
 
     # Compile for B200 performance
-    if hasattr(torch, "compile"):
-        print("Compiling model with torch.compile (max-autotune)...")
-        model = torch.compile(model, mode="max-autotune")
+    if compile and hasattr(torch, "compile"):
+        import torch._inductor.config
+        torch._inductor.config.fx_graph_cache = True
+        # Persist cache on Modal Volume so it survives across containers
+        os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", "/data/.torch_cache/inductor")
+        os.makedirs("/data/.torch_cache/inductor", exist_ok=True)
+        print(f"Compiling model with torch.compile(mode={compile_mode!r}, cache=/data/.torch_cache)...")
+        model = torch.compile(model, mode=compile_mode)
 
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {param_count / 1e6:.1f}M")
@@ -384,6 +393,7 @@ def train(
 @app.local_entrypoint()
 def main(
     model_id: str = "bitskip_modal_run",
+    model_size: str = "125M",
     dataset: str = "wikitext2",
     precision: str = "int8",
     use_hadamard: bool = False,
@@ -396,14 +406,17 @@ def main(
     batch_size: int = 128,
     gradient_accumulation_steps: int = 1,
     learning_rate: float = 6e-4,
-    num_steps: int = 5000,
+    num_steps: int = 500,
     eval_every_steps: int = 250,
     seed: int = 42,
+    compile: bool = True,
+    compile_mode: str = "default",
     wandb: bool = False,
     wandb_project: str = "bitskip-v2",
 ):
     result = train.remote(
         model_id=model_id,
+        model_size=model_size,
         dataset=dataset,
         precision=precision,
         use_hadamard=use_hadamard,
@@ -419,6 +432,8 @@ def main(
         num_steps=num_steps,
         eval_every_steps=eval_every_steps,
         seed=seed,
+        compile=compile,
+        compile_mode=compile_mode,
         wandb_enabled=wandb,
         wandb_project=wandb_project,
     )

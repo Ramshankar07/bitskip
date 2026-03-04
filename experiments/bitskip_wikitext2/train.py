@@ -37,7 +37,7 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default="./results", help="Directory to save results")
     
     # Model Configuration
-    parser.add_argument("--model_size", type=str, default="125M", choices=["125M"], help="Model size preset")
+    parser.add_argument("--model_size", type=str, default="125M", choices=["125M", "85M_H"], help="Model size preset")
     parser.add_argument("--precision", type=str, default="fp16", choices=["fp16", "int8", "int4"], help="Weight precision")
     parser.add_argument("--use_hadamard", action="store_true", help="Use Hadamard transform")
     
@@ -330,8 +330,10 @@ def main():
 
     if args.compile:
         if hasattr(torch, "compile"):
-            logger.info("Compiling model with torch.compile (max-autotune)...")
-            model = torch.compile(model, mode="max-autotune")
+            import torch._inductor.config
+            torch._inductor.config.fx_graph_cache = True
+            logger.info("Compiling model with torch.compile (cache enabled)...")
+            model = torch.compile(model, mode="default")
         else:
             logger.warning("torch.compile is not available in this version of PyTorch. Skipping compilation.")
     
