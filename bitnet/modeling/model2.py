@@ -311,8 +311,10 @@ class BitNetModel2(nn.Module):
                 # Add early exit losses if eligible and early exit is enabled
                 if bool(getattr(self, 'training', False)) and has_early_exit_eligible and all_hidden_states and bool(getattr(self.config, 'use_early_exit', False)):
                     ee_weight = getattr(self.config, 'early_exit_loss_weight', 0.3)
+                    # Apply same final layer_norm to every exit so lm_head sees same input distribution (no extra params, smoother early-exit PPL)
+                    all_hidden_states_ln = [self.layer_norm(h) for h in all_hidden_states]
                     early_exit_loss = compute_early_exit_loss(
-                        all_hidden_states,
+                        all_hidden_states_ln,
                         labels,
                         self.lm_head,
                         training_step,

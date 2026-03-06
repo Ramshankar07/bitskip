@@ -110,8 +110,8 @@ def compute_early_exit_loss(
         return torch.tensor(0.0, device=targets.device if targets is not None else 'cpu', requires_grad=True)
 
     L = len(hidden_states_list)
-    # Paper formula: w_i = (i+1)/L, then normalize
-    weights = [(l + 1) / L for l in range(L)]
+    # Front-loaded weighting: earlier layers get higher relative weight
+    weights = [1.0 / (l + 1) for l in range(L)]
     weight_sum = sum(weights)
     normalized_weights = [w / weight_sum for w in weights]
 

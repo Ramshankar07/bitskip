@@ -8,12 +8,13 @@
 ## Summary
 
 
-| Run | Model | Fix Applied | noH Best Val PPL | H Best Val PPL | H Status |
-|-----|-------|------------|-------------------|----------------|----------|
-| Run 1 (pre-fix) | 125M (768h) | None (no causal mask) | ~16 (invalid) | ~1,794 | Collapsed |
-| Run 2 | 125M (768h) | Causal mask + H-BitLinear fixes | **251.11** | ~1,494 | Collapsed |
-| Run 3 | 85M_H (512h) | activation_bits fix + power-of-2 dims | **252.93** | ~1,491 | Collapsed (unchanged) |
-| Run 4 | 85M_H (512h) | **squared_relu added to HBitLinear** | — | **957.03** | **Learning (fixed!)** |
+| Run             | Model        | Fix Applied                           | noH Best Val PPL | H Best Val PPL | H Status              |
+| --------------- | ------------ | ------------------------------------- | ---------------- | -------------- | --------------------- |
+| Run 1 (pre-fix) | 125M (768h)  | None (no causal mask)                 | ~16 (invalid)    | ~1,794         | Collapsed             |
+| Run 2           | 125M (768h)  | Causal mask + H-BitLinear fixes       | **251.11**       | ~1,494         | Collapsed             |
+| Run 3           | 85M_H (512h) | activation_bits fix + power-of-2 dims | **252.93**       | ~1,491         | Collapsed (unchanged) |
+| Run 4           | 85M_H (512h) | **squared_relu added to HBitLinear**  | —                | **957.03**     | **Learning (fixed!)** |
+
 
 **Run 4 — Root cause found and fixed:**
 
@@ -24,6 +25,7 @@ The "Hadamard collapse" was caused by a **missing activation function** in `HBit
 **Result:** H model PPL dropped from ~1,503 (collapsed) to **957** (early-stopped at step 400). The model is now genuinely learning. Gap to noH (254) remains — likely needs hyperparameter tuning and longer training now that the architecture is functional.
 
 **Diagnostic tests that isolated the root cause:**
+
 1. FWHT unit test: H(H(x))=x passed for all sizes (kernel is correct)
 2. H model with no quantization: still collapsed (quant not the cause)
 3. H model with no output FWHT + standard init: still collapsed (FWHT not the cause)
@@ -37,14 +39,200 @@ The "Hadamard collapse" was caused by a **missing activation function** in `HBit
 **Model:** 85M_H (512 hidden, 12 layers, 8 heads, 4 KV heads, 2048 FFN)
 **Fix:** Added `squared_relu` activation to the end of `HBitLinear.forward()`.
 
-| Experiment | H | Config | Seed | Best Val PPL | Final Val PPL | Steps | Notes |
-|---|---|---|---|---|---|---|---|
-| V2_sqrelu_fix_H_s42 | Yes | lambda_r=0.0, lambda_q=0.0 | 42 | **957.03** | **957.03** | 400 (early stop) | **No longer collapsed** |
+
+| Experiment          | H   | Config                     | Seed | Best Val PPL | Final Val PPL | Steps            | Notes                   |
+| ------------------- | --- | -------------------------- | ---- | ------------ | ------------- | ---------------- | ----------------------- |
+| V2_sqrelu_fix_H_s42 | Yes | lambda_r=0.0, lambda_q=0.0 | 42   | **957.03**   | **957.03**    | 400 (early stop) | **No longer collapsed** |
+
 
 **Comparison (same config, lambda_r=0.0):**
+
 - noH (Run 3): Final Val PPL **254.56**
 - H before fix (Run 3): Final Val PPL **1,503.47** (collapsed)
 - H after fix (Run 4): Final Val PPL **957.03** (36% improvement, learning)
+
+---
+
+## Composition Ablation (4-way) + Weight Insights
+
+**Setup:** 85M_H, WikiText-2, best config (lambda_r=0.2, lambda_q=0.05, p_max=0.7, early_exit_lambda=0.3), seed 7. 10k max steps, eval every 100. Models pushed to Hugging Face (Ram07/*, private) with weight analysis.
+
+### Composition results
+
+
+| Config                            | Best Val PPL | Steps |
+| --------------------------------- | ------------ | ----- |
+| Baseline (no H, no EE)            | 228.77       | 1800  |
+| H-only (Hadamard, no EE)          | **185.46**   | 1800  |
+| EE-only (no Hadamard, early exit) | 252.37       | 2100  |
+| BitSkip (H + EE)                  | 216.06       | 1800  |
+
+
+**Takeaway:** H-only achieves best PPL (185.46); EE-only is worst (252.37). BitSkip (H+EE) sits between baseline and H-only.
+
+### Weight insights (per model)
+
+
+| Model            | Best Val PPL | keys | params     | scale [min, max] | mean_scale | Sparsity (mean / max) | layers_high(≥50%) | Ternary frac +1 | Ternary frac −1 |
+| ---------------- | ------------ | ---- | ---------- | ---------------- | ---------- | --------------------- | ----------------- | --------------- | --------------- |
+| comp_baseline_s7 | 228.77       | 72   | 34,603,008 | [0.0010, 0.0215] | 0.005125   | 30.40% / 57.19%       | 4                 | 34.01%          | 35.60%          |
+| comp_H_only_s7   | 185.46       | 72   | 34,603,008 | [0.0053, 0.0230] | 0.015055   | 35.59% / 40.03%       | 0                 | 32.05%          | 32.36%          |
+| comp_EE_only_s7  | 252.37       | 72   | 34,603,008 | [0.0010, 0.0281] | 0.003648   | 26.85% / 48.65%       | 0                 | 36.00%          | 37.15%          |
+| comp_BitSkip_s7  | 216.06       | 72   | 34,603,008 | [0.0020, 0.0247] | 0.012157   | 35.26% / 46.30%       | 0                 | 32.32%          | 32.42%          |
+
+
+**Analysis:**
+
+- **H-only** has highest mean scale (0.0151) and no high-sparsity layers; scales are in a tighter band — consistent with Hadamard rotation.
+- **Baseline** has lowest mean scale (0.0051), highest max sparsity (57.19%), and 4 layers with ≥50% sparsity.
+- **EE-only** has lowest mean sparsity (26.85%) and most asymmetric ternary (36.0% +1, 37.15% −1).
+- **BitSkip** is between baseline and H-only on scale and sparsity; ternary is nearly balanced (32.32% / 32.42%).
+
+```text
+====================================================================================
+================
+COMPOSITION ABLATION — FULL-PRECISION vs 1.5-BIT COMPARISON
+====================================================================================
+================
+Config                         FP PPL  1.5b PPL   Δ PPL%  Mean Scale  Sparsity  
+Hi-Sparse
+------------------------------------------------------------------------------------
+----------------
+Baseline (no H, no EE)         228.76    451.03  +97.17%    0.005125    30.4%       
+4
+H-only (Hadamard)              185.45    389.65 +110.11%    0.015055    35.6%       
+0
+EE-only (Early Exit)           252.34    478.38  +89.58%    0.003648    26.9%       
+0
+BitSkip (H + EE)               216.06    764.36 +253.76%    0.012157    35.3%       
+0
+====================================================================================
+================
+
+WEIGHT DISTRIBUTION (ternary bucket fractions)
+====================================================================================
+================
+Config                        +1 frac  -1 frac   0 frac  Min Scale  Max Scale  
+#Layers
+------------------------------------------------------------------------------------
+----------------
+Baseline (no H, no EE)         34.0%   35.6%   30.4%   0.001040   0.021546       72
+H-only (Hadamard)              32.0%   32.4%   35.6%   0.005340   0.022986       72
+EE-only (Early Exit)           36.0%   37.1%   26.9%   0.001016   0.028080       72
+BitSkip (H + EE)               32.3%   32.4%   35.3%   0.002011   0.024732       72
+====================================================================================
+================
+
+EARLY EXIT LAYER PPL — BitSkip (H + EE)
+====================================================================================
+================
+Exit Layer       Loss        PPL
+------------------------------------------------------------------------------------
+----------------
+         0    11.2706   78480.44
+         1    11.3689   86584.36
+         2    11.3250   82870.06
+         3    11.2501   76888.66
+         4    11.1302   68197.78
+         5    10.9687   58026.51
+         6    10.5851   39540.34
+         7    10.1505   25602.75
+         8     9.9153   20237.07
+         9     9.6755   15922.90
+        10     9.4269   12417.69
+        11     5.3756     216.06
+====================================================================================
+================
+
+Best full-precision PPL : H-only (Hadamard) (185.45)
+Best 1.5-bit PPL       : H-only (Hadamard) (389.65)
+Least PPL degradation  : EE-only (Early Exit) (+89.58%)
+```
+
+```text
+Preparing wikitext2 validation set...
+  Model config: size=85M_H, hadamard=True
+  Validation batches: 31
+
+Evaluating full-precision checkpoint...
+Using BitNetModel2 (Hadamard)
+  Loaded 415/415 model keys
+  Eval full-precision: 100%|██████████| 31/31 [00:05<00:00,  5.19batch/s]
+  Full-precision PPL: 197.87  (loss=5.2876)
+
+Evaluating 1.5-bit (ternary) checkpoint...
+Using BitNetModel2 (Hadamard)
+  Loaded 415/415 model keys
+  Eval 1.5-bit: 100%|██████████| 31/31 [00:02<00:00, 13.92batch/s]
+  1.5-bit PPL: 490.17  (loss=6.1948)
+
+Analyzing early exit PPL per layer (0..11)...
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=0: 100%|██████████| 31/31 [00:00<00:00, 47.93batch/s]
+  Exit layer  0: PPL=2334.09 loss=7.7554
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=1: 100%|██████████| 31/31 [00:00<00:00, 40.12batch/s]
+  Exit layer  1: PPL=2689.45 loss=7.8971
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=2: 100%|██████████| 31/31 [00:00<00:00, 31.02batch/s]
+  Exit layer  2: PPL=2949.96 loss=7.9895
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=3: 100%|██████████| 31/31 [00:01<00:00, 27.31batch/s]
+  Exit layer  3: PPL=3155.34 loss=8.0569
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=4: 100%|██████████| 31/31 [00:01<00:00, 24.93batch/s]
+  Exit layer  4: PPL=3252.79 loss=8.0873
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=5: 100%|██████████| 31/31 [00:01<00:00, 22.35batch/s]
+  Exit layer  5: PPL=3239.28 loss=8.0831
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=6: 100%|██████████| 31/31 [00:01<00:00, 20.45batch/s]
+  Exit layer  6: PPL=3159.02 loss=8.0580
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=7: 100%|██████████| 31/31 [00:01<00:00, 18.55batch/s]
+  Exit layer  7: PPL=3064.22 loss=8.0275
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=8: 100%|██████████| 31/31 [00:01<00:00, 16.77batch/s]
+  Exit layer  8: PPL=2948.15 loss=7.9889
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=9: 100%|██████████| 31/31 [00:02<00:00, 15.45batch/s]
+  Exit layer  9: PPL=2816.23 loss=7.9432
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=10:  87%|████████▋ | 27/31 [00:01<00:00, 17.11batch/s]⠙ Running (2
+  Eval exit_layer=10: 100%|██████████| 31/31 [00:02<00:00, 14.96batch/s]
+  Exit layer 10: PPL=2660.59 loss=7.8863
+Using BitNetModel2 (Hadamard)
+  Eval exit_layer=11: 100%|██████████| 31/31 [00:02<00:00, 14.06batch/s]
+  Exit layer 11: PPL=197.87 loss=5.2876
+
+============================================================
+RESULTS: Ram07/ls_base_H_EE_s7
+============================================================
+  Full-precision PPL : 197.87
+  1.5-bit PPL        : 490.17
+  PPL degradation    : +147.72%
+  Mean ternary scale : 0.010327
+  Mean sparsity      : 35.13%
+  High-sparsity layers (≥50%): 0
+============================================================
+      FP PPL=197.87 1.5b PPL=490.17
+```
+
+```text
+Final Validation Perplexity: 233.89
+Result: best_val_ppl=233.89 (steps=1700)
+Pushing comp_EE_only_s7 -> Ram07/comp_EE_only_s7 ...
+Processing Files (2 / 2)      : 100%|██████████|  697MB /  697MB, 11.3MB/s  
+Processing Files (2 / 2)      : 100%|██████████|  697MB /  697MB, 1.96MB/s  
+New Data Upload               : 100%|██████████|  569MB /  569MB, 1.96MB/s  
+  .../model_1.5bit.safetensors: 100%|██████████|  349MB /  349MB            
+  ...bbzqsba/model.safetensors: 100%|██████████|  349MB /  349MB            
+  HF upload OK. Summary: {'quantizable_keys': 72, 'total_quantizable_params': 
+34603008, 'mean_scale': 0.0035052261179468283, 'min_scale': 0.001032170606777072, 
+'max_scale': 0.021438241004943848, 'mean_sparsity': 0.27162836657630074, 
+'max_sparsity': 0.45767974853515625, 'layers_high_sparsity': 0, 'mean_frac_pos': 
+0.36006059911515975, 'mean_frac_neg': 0.3683110343085395}
+```
 
 ---
 
@@ -54,7 +242,7 @@ The "Hadamard collapse" was caused by a **missing activation function** in `HBit
 
 ### Fixes Applied
 
-- **`gqa_attention2.py`:** All 4 HBitLinear projections (q/k/v/o_proj) now pass `activation_bits=activation_bits`. Previously defaulted to 4-bit regardless of config.
+- `**gqa_attention2.py`:** All 4 HBitLinear projections (q/k/v/o_proj) now pass `activation_bits=activation_bits`. Previously defaulted to 4-bit regardless of config.
 - **Model size:** Switched to `85M_H` — all dimensions are powers of 2 (512, 2048), so HBitLinear has **zero padding**. This eliminates the padding-corruption hypothesis.
 
 ### Stage 1: Routing Loss (lambda_r) Sweep
