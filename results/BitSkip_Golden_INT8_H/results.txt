@@ -1,0 +1,3 @@
+Validation Perplexity: 14323.61
+Final Step: 50
+Best Validation PPL: 14323.61
